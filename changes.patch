@@ -1,0 +1,365 @@
+# paste into Codespaces terminal with:  git apply changes.patch  &&  git add -A  &&  git commit -m "feat: GitHub Pages deployment + manual boss/grace toggles"  &&  git push
+From a338f648504b6f8ac9ed45237c38aa533846f11a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 17 Sep 2026 18:09:03 -0400
+Subject: [PATCH] feat: add GitHub Pages deployment and manual boss/grace
+ toggles
+
+- Add .github/workflows/deploy.yml: builds with GITHUB_PAGES=true and
+  deploys .output/public/ to GitHub Pages via Actions; copies index.html
+  to 404.html for SPA client-side routing fallback.
+
+- vite.config.ts: set base='/elden-ring-compass/' and Nitro static preset
+  when GITHUB_PAGES env is set; enable TanStack Start prerendering for the
+  root route only so GitHub Pages gets a real index.html.
+
+- router.tsx: pass basepath=import.meta.env.BASE_URL to createRouter so
+  TanStack Router respects the /elden-ring-compass/ prefix on GitHub Pages.
+
+- save-file-source-store.ts: prefix SAMPLE_SAVE_URL with BASE_URL so the
+  sample save resolves correctly under the GitHub Pages subdirectory.
+
+- Add manual-overrides-store.ts: Effect Atom backed by localStorage that
+  stores per-entity manual done/not-done toggles (keyed by event-flag id).
+
+- bosses-data-table.tsx: add a 'Manual' checkbox column that lets users
+  mark any boss as defeated without connecting a save file. State persists
+  across page refreshes via the new manual-overrides store.
+
+- graces-data-table.tsx: same Manual checkbox column for Sites of Grace.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MWZvnC76c4WGRmDPK2N4M4
+---
+ .github/workflows/deploy.yml                  | 56 +++++++++++++++++++
+ .../components/sections/bosses-data-table.tsx | 36 +++++++++++-
+ .../components/sections/graces-data-table.tsx | 34 ++++++++++-
+ apps/web/src/router.tsx                       |  3 +
+ apps/web/src/stores/manual-overrides-store.ts | 33 +++++++++++
+ apps/web/src/stores/save-file-source-store.ts |  5 +-
+ apps/web/vite.config.ts                       | 22 +++++++-
+ 7 files changed, 181 insertions(+), 8 deletions(-)
+ create mode 100644 .github/workflows/deploy.yml
+ create mode 100644 apps/web/src/stores/manual-overrides-store.ts
+
+diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
+new file mode 100644
+index 00000000..f12b39d1
+--- /dev/null
++++ b/.github/workflows/deploy.yml
+@@ -0,0 +1,56 @@
++name: Deploy to GitHub Pages
++
++on:
++  push:
++    branches: [main]
++  workflow_dispatch:
++
++permissions:
++  contents: read
++  pages: write
++  id-token: write
++
++# Only one deployment runs at a time; cancel in-progress if a new push arrives.
++concurrency:
++  group: pages
++  cancel-in-progress: true
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: oven-sh/setup-bun@v2
++        with:
++          bun-version: "1.4.2"
++
++      - name: Install dependencies
++        run: bun install --frozen-lockfile
++
++      - name: Build (static / GitHub Pages)
++        run: bun run build
++        working-directory: apps/web
++        env:
++          GITHUB_PAGES: "true"
++
++      # GitHub Pages serves 404.html for any path it doesn't recognise.
++      # Copying index.html there lets TanStack Router handle client-side routing.
++      - name: Add SPA 404 fallback
++        run: cp apps/web/.output/public/index.html apps/web/.output/public/404.html
++
++      - name: Upload Pages artifact
++        uses: actions/upload-pages-artifact@v3
++        with:
++          path: apps/web/.output/public
++
++  deploy:
++    needs: build
++    runs-on: ubuntu-latest
++    environment:
++      name: github-pages
++      url: ${{ steps.deployment.outputs.page_url }}
++    steps:
++      - name: Deploy to GitHub Pages
++        id: deployment
++        uses: actions/deploy-pages@v4
+diff --git a/apps/web/src/components/sections/bosses-data-table.tsx b/apps/web/src/components/sections/bosses-data-table.tsx
+index 7b659b20..c0213347 100644
+--- a/apps/web/src/components/sections/bosses-data-table.tsx
++++ b/apps/web/src/components/sections/bosses-data-table.tsx
+@@ -5,6 +5,7 @@ import { type BossBadge, BADGE_LABEL, bossBadges, bossMapName, bossReward } from
+ import type { MasterPixel } from '@/lib/map-affine';
+ import { bossFlagToPixel } from '@/lib/vm/map-pins';
+ import { useSelectedSlot } from '@/stores/slot-selection-store';
++import { useManualToggle } from '@/stores/manual-overrides-store';
+ 
+ import { wikiNameForBoss } from '@/lib/wiki';
+ 
+@@ -16,6 +17,7 @@ import {
+ import { DataTable } from '../data-table/data-table';
+ import { createAppColumnHelper, DataTableColumnDef, DataTableRow } from '../data-table/table-hook';
+ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
++import { Checkbox } from '../ui/checkbox';
+ import { BossBadges } from './boss-badge';
+ 
+ type BossRow = {
+@@ -43,6 +45,23 @@ const renderCategoryCell = ({ row }: { row: DataTableRow<BossRow> }) => (
+   <BossBadges badges={row.original.badges} />
+ );
+ 
++/**
++ * Manual-toggle checkbox cell. Uses a hook so it must be a component (not a
++ * plain function) — React guarantees hook call order within a component.
++ */
++function ManualDefeatedCell({ row }: { row: DataTableRow<BossRow> }) {
++  const { isManuallyDone, toggle } = useManualToggle(row.original.id.toString());
++  return (
++    <div className='flex justify-center'>
++      <Checkbox
++        checked={isManuallyDone}
++        onCheckedChange={toggle}
++        aria-label={`Manually mark ${row.original.name} as defeated`}
++      />
++    </div>
++  );
++}
++
+ const renderRewardCell = ({ row }: { row: DataTableRow<BossRow> }) =>
+   row.original.reward ? (
+     <div className='flex items-center gap-1.5'>
+@@ -120,6 +139,20 @@ export function BossesDataTable() {
+       }),
+     ];
+     if (connected) cols.push(commonAccessorColumnDef(helper, 'defeated', 'Defeated'));
++    // Manual toggle column — always visible. Lets you mark bosses as defeated
++    // without (or alongside) a save file; state persists to localStorage.
++    cols.push(
++      helper.display({
++        id: 'manual',
++        header: 'Manual',
++        size: 72,
++        enableSorting: false,
++        enableHiding: true,
++        enableResizing: false,
++        enableColumnFilter: false,
++        cell: ({ row }) => <ManualDefeatedCell row={row} />,
++      }),
++    );
+     return cols;
+   }, [connected]);
+ 
+@@ -134,7 +167,8 @@ export function BossesDataTable() {
+             ? `${defeatedCount} / ${rows.length} - (${Math.round((defeatedCount / rows.length) * 100)}% defeated)`
+             : `${rows.length} bosses in the game`}
+           {' · '}filter by name, map, category or reward, then tap the pin to drop a boss on the
+-          map.
++          map. Use the <strong>Manual</strong> column to check off bosses without a save file —
++          your choices are saved in this browser.
+         </CardDescription>
+       </CardHeader>
+       <CardContent>
+diff --git a/apps/web/src/components/sections/graces-data-table.tsx b/apps/web/src/components/sections/graces-data-table.tsx
+index 1c87316d..718fb1ea 100644
+--- a/apps/web/src/components/sections/graces-data-table.tsx
++++ b/apps/web/src/components/sections/graces-data-table.tsx
+@@ -1,12 +1,28 @@
+ import { useDataTableData } from '@/lib/data-table-data';
+ import { eventsDbView } from '@/lib/vm/events';
++import { useManualToggle } from '@/stores/manual-overrides-store';
+ import { commonAccessorColumnDef, commonPinColumnDef } from '../data-table/common-column-defs';
+ import { DataTable } from '../data-table/data-table';
+-import { createAppColumnHelper, DataTableColumnDef } from '../data-table/table-hook';
++import { createAppColumnHelper, DataTableColumnDef, DataTableRow } from '../data-table/table-hook';
+ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
++import { Checkbox } from '../ui/checkbox';
+ 
+ type Grace = ReturnType<typeof eventsDbView>[0];
+ 
++/** Manual-toggle checkbox for a single grace row. */
++function ManualDiscoveredCell({ row }: { row: DataTableRow<Grace> }) {
++  const { isManuallyDone, toggle } = useManualToggle(row.original.id.toString());
++  return (
++    <div className='flex justify-center'>
++      <Checkbox
++        checked={isManuallyDone}
++        onCheckedChange={toggle}
++        aria-label={`Manually mark ${row.original.name} as discovered`}
++      />
++    </div>
++  );
++}
++
+ export function GracesDataTable() {
+   // `eventsDbView` carries graces + bosses (it feeds the map pins). Bosses have a
+   // dedicated, richer route (/bosses), so this table is graces-only.
+@@ -20,9 +36,10 @@ export function GracesDataTable() {
+         <CardDescription>
+           Graces discovered across the Lands Between
+           <br />
+-          {litCount} / {items.length}
++          {litCount} / {items.length} · {((litCount / items.length) * 100).toFixed(0)}% lit
+           <br />
+-          {((litCount / items.length) * 100).toFixed(0)}% lit
++          Use the <strong>Manual</strong> column to mark graces as visited without a save file —
++          your choices are saved in this browser.
+         </CardDescription>
+       </CardHeader>
+       <CardContent className='flex min-h-0 flex-1 flex-col'>
+@@ -44,5 +61,16 @@ const columns: Array<DataTableColumnDef<Grace>> = [
+     filterFn: 'includesString',
+   }),
+   commonAccessorColumnDef(columnHelper, 'on', 'Discovered'),
++  // Manual toggle — persisted to localStorage, works with or without a save file.
++  columnHelper.display({
++    id: 'manual',
++    header: 'Manual',
++    size: 72,
++    enableSorting: false,
++    enableHiding: true,
++    enableResizing: false,
++    enableColumnFilter: false,
++    cell: ({ row }) => <ManualDiscoveredCell row={row} />,
++  }),
+   commonAccessorColumnDef(columnHelper, (row) => !!row.pixel, 'Has Coordinates'),
+ ];
+diff --git a/apps/web/src/router.tsx b/apps/web/src/router.tsx
+index e2860805..3f921531 100644
+--- a/apps/web/src/router.tsx
++++ b/apps/web/src/router.tsx
+@@ -7,6 +7,9 @@ export const getRouter = () => {
+   const router = createRouter({
+     routeTree,
+     context: {},
++    // Vite sets BASE_URL from the `base` config option so the router respects
++    // the /elden-ring-compass/ prefix when deployed to GitHub Pages.
++    basepath: import.meta.env.BASE_URL,
+     defaultNotFoundComponent: NotFound,
+     // Shown in the content area while a route resolves (mainly lazy chunk loads,
+     // since data comes from in-memory atoms not async loaders).
+diff --git a/apps/web/src/stores/manual-overrides-store.ts b/apps/web/src/stores/manual-overrides-store.ts
+new file mode 100644
+index 00000000..c022c95a
+--- /dev/null
++++ b/apps/web/src/stores/manual-overrides-store.ts
+@@ -0,0 +1,33 @@
++import { Schema } from 'effect';
++import { Atom } from 'effect/unstable/reactivity';
++import { useAtom } from '@effect/atom-react';
++import { browserKvsRuntime } from '@/lib/atoms/kvs';
++
++/**
++ * Persisted map of entity-id → manually-toggled state.
++ *
++ * Keys are stringified event-flag IDs (matching the `id` field on boss / grace
++ * rows). Values are `true` when the user has manually marked the entity as done
++ * and `false` (or absent) otherwise.
++ *
++ * Backed by localStorage via the shared KVS runtime so state survives page
++ * refreshes. When a save is also connected, this is shown alongside (not instead
++ * of) the live save-file data so the user can compare.
++ */
++const manualOverridesAtom = Atom.kvs({
++  runtime: browserKvsRuntime,
++  key: 'manual-overrides-v1',
++  schema: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
++  defaultValue: () => ({}) as Record<string, boolean>,
++});
++
++/** Returns `[overrides, setOverrides]` — a controlled record of manual toggles. */
++export const useManualOverrides = () => useAtom(manualOverridesAtom);
++
++/** Toggle a single entity by its string id, updating the persisted record. */
++export function useManualToggle(id: string) {
++  const [overrides, setOverrides] = useManualOverrides();
++  const isManuallyDone = overrides[id] ?? false;
++  const toggle = () => setOverrides({ ...overrides, [id]: !isManuallyDone });
++  return { isManuallyDone, toggle };
++}
+diff --git a/apps/web/src/stores/save-file-source-store.ts b/apps/web/src/stores/save-file-source-store.ts
+index 056a19eb..efd3f956 100644
+--- a/apps/web/src/stores/save-file-source-store.ts
++++ b/apps/web/src/stores/save-file-source-store.ts
+@@ -61,8 +61,9 @@ export const saveFileSourceAtom = Atom.writable<
+ );
+ 
+ // The in-repo sample save served from /public — lets people explore a fully
+-// connected dashboard without owning the game.
+-export const SAMPLE_SAVE_URL = '/ER0000.sl2';
++// connected dashboard without owning the game. Prefixed with BASE_URL so the
++// path stays correct when deployed to GitHub Pages (e.g. /elden-ring-compass/).
++export const SAMPLE_SAVE_URL = `${import.meta.env.BASE_URL}ER0000.sl2`;
+ 
+ // Type guards
+ export const isFileSource = (src?: SaveFileSource): src is FileUploadSource =>
+diff --git a/apps/web/vite.config.ts b/apps/web/vite.config.ts
+index a5dca1ed..f6a70d92 100644
+--- a/apps/web/vite.config.ts
++++ b/apps/web/vite.config.ts
+@@ -21,15 +21,26 @@ import { erDataTiles } from './vite-plugins/er-data-tiles.ts';
+ // the Build Output API to `.vercel/output` (NOT `.output`). In a monorepo Vercel only auto-detects
+ // that dir at the REPO ROOT, but Nitro writes it relative to its cwd (apps/web) — so redirect the
+ // output up two levels. Locally (no VERCEL) the default node-server preset + `.output` is untouched.
++// GITHUB_PAGES: static preset + prerender the root so GitHub Pages can serve index.html; all
++// other routes are handled client-side via TanStack Router (see the 404.html copy in deploy.yml).
++const isGitHubPages = !!process.env.GITHUB_PAGES;
+ const appOnlyPlugins = process.env.VITEST
+   ? []
+   : [
+       devtools(),
+-      tanstackStart({ prerender: { enabled: false } }),
++      tanstackStart({
++        prerender: {
++          enabled: isGitHubPages,
++          // Only prerender the root — client-side routing handles everything else.
++          routes: isGitHubPages ? ['/'] : undefined,
++        },
++      }),
+       nitro(
+         process.env.VERCEL
+           ? { output: { dir: path.resolve(import.meta.dirname, '../../.vercel/output') } }
+-          : undefined,
++          : isGitHubPages
++            ? { preset: 'static' }
++            : undefined,
+       ),
+     ];
+ 
+@@ -41,7 +52,14 @@ const reactCompilerPlugins = process.env.VITEST
+   ? []
+   : [babel({ presets: [reactCompilerPreset()] })];
+ 
++// Repository name — must match the GitHub repo slug exactly (case-sensitive).
++const GH_PAGES_BASE = '/elden-ring-compass/';
++
+ export default defineConfig({
++  // When deploying to GitHub Pages the site lives at /<repo-name>/, so all
++  // asset and router paths are prefixed accordingly. Locally and on Vercel it
++  // stays at the root.
++  base: isGitHubPages ? GH_PAGES_BASE : '/',
+   server: {
+     port: 3005,
+     strictPort: true,
+-- 
+2.43.0
+

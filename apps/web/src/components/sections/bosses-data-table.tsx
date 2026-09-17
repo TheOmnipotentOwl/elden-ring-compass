@@ -5,6 +5,7 @@ import { type BossBadge, BADGE_LABEL, bossBadges, bossMapName, bossReward } from
 import type { MasterPixel } from '@/lib/map-affine';
 import { bossFlagToPixel } from '@/lib/vm/map-pins';
 import { useSelectedSlot } from '@/stores/slot-selection-store';
+import { useManualToggle } from '@/stores/manual-overrides-store';
 
 import { wikiNameForBoss } from '@/lib/wiki';
 
@@ -16,6 +17,7 @@ import {
 import { DataTable } from '../data-table/data-table';
 import { createAppColumnHelper, DataTableColumnDef, DataTableRow } from '../data-table/table-hook';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
+import { Checkbox } from '../ui/checkbox';
 import { BossBadges } from './boss-badge';
 
 type BossRow = {
@@ -42,6 +44,23 @@ type BossRow = {
 const renderCategoryCell = ({ row }: { row: DataTableRow<BossRow> }) => (
   <BossBadges badges={row.original.badges} />
 );
+
+/**
+ * Manual-toggle checkbox cell. Uses a hook so it must be a component (not a
+ * plain function) — React guarantees hook call order within a component.
+ */
+function ManualDefeatedCell({ row }: { row: DataTableRow<BossRow> }) {
+  const { isManuallyDone, toggle } = useManualToggle(row.original.id.toString());
+  return (
+    <div className='flex justify-center'>
+      <Checkbox
+        checked={isManuallyDone}
+        onCheckedChange={toggle}
+        aria-label={`Manually mark ${row.original.name} as defeated`}
+      />
+    </div>
+  );
+}
 
 const renderRewardCell = ({ row }: { row: DataTableRow<BossRow> }) =>
   row.original.reward ? (
@@ -120,6 +139,20 @@ export function BossesDataTable() {
       }),
     ];
     if (connected) cols.push(commonAccessorColumnDef(helper, 'defeated', 'Defeated'));
+    // Manual toggle column — always visible. Lets you mark bosses as defeated
+    // without (or alongside) a save file; state persists to localStorage.
+    cols.push(
+      helper.display({
+        id: 'manual',
+        header: 'Manual',
+        size: 72,
+        enableSorting: false,
+        enableHiding: true,
+        enableResizing: false,
+        enableColumnFilter: false,
+        cell: ({ row }) => <ManualDefeatedCell row={row} />,
+      }),
+    );
     return cols;
   }, [connected]);
 
@@ -134,7 +167,8 @@ export function BossesDataTable() {
             ? `${defeatedCount} / ${rows.length} - (${Math.round((defeatedCount / rows.length) * 100)}% defeated)`
             : `${rows.length} bosses in the game`}
           {' · '}filter by name, map, category or reward, then tap the pin to drop a boss on the
-          map.
+          map. Use the <strong>Manual</strong> column to check off bosses without a save file —
+          your choices are saved in this browser.
         </CardDescription>
       </CardHeader>
       <CardContent>

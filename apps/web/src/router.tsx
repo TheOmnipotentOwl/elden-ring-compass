@@ -7,6 +7,9 @@ export const getRouter = () => {
   const router = createRouter({
     routeTree,
     context: {},
+    // Vite sets BASE_URL from the `base` config option so the router respects
+    // the /elden-ring-compass/ prefix when deployed to GitHub Pages.
+    basepath: import.meta.env.BASE_URL,
     defaultNotFoundComponent: NotFound,
     // Shown in the content area while a route resolves (mainly lazy chunk loads,
     // since data comes from in-memory atoms not async loaders).

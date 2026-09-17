@@ -61,8 +61,9 @@ export const saveFileSourceAtom = Atom.writable<
 );
 
 // The in-repo sample save served from /public — lets people explore a fully
-// connected dashboard without owning the game.
-export const SAMPLE_SAVE_URL = '/ER0000.sl2';
+// connected dashboard without owning the game. Prefixed with BASE_URL so the
+// path stays correct when deployed to GitHub Pages (e.g. /elden-ring-compass/).
+export const SAMPLE_SAVE_URL = `${import.meta.env.BASE_URL}ER0000.sl2`;
 
 // Type guards
 export const isFileSource = (src?: SaveFileSource): src is FileUploadSource =>

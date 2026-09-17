@@ -21,15 +21,26 @@ import { erDataTiles } from './vite-plugins/er-data-tiles.ts';
 // the Build Output API to `.vercel/output` (NOT `.output`). In a monorepo Vercel only auto-detects
 // that dir at the REPO ROOT, but Nitro writes it relative to its cwd (apps/web) — so redirect the
 // output up two levels. Locally (no VERCEL) the default node-server preset + `.output` is untouched.
+// GITHUB_PAGES: static preset + prerender the root so GitHub Pages can serve index.html; all
+// other routes are handled client-side via TanStack Router (see the 404.html copy in deploy.yml).
+const isGitHubPages = !!process.env.GITHUB_PAGES;
 const appOnlyPlugins = process.env.VITEST
   ? []
   : [
       devtools(),
-      tanstackStart({ prerender: { enabled: false } }),
+      tanstackStart({
+        prerender: {
+          enabled: isGitHubPages,
+          // Only prerender the root — client-side routing handles everything else.
+          routes: isGitHubPages ? ['/'] : undefined,
+        },
+      }),
       nitro(
         process.env.VERCEL
           ? { output: { dir: path.resolve(import.meta.dirname, '../../.vercel/output') } }
-          : undefined,
+          : isGitHubPages
+            ? { preset: 'static' }
+            : undefined,
       ),
     ];
 
@@ -41,7 +52,14 @@ const reactCompilerPlugins = process.env.VITEST
   ? []
   : [babel({ presets: [reactCompilerPreset()] })];
 
+// Repository name — must match the GitHub repo slug exactly (case-sensitive).
+const GH_PAGES_BASE = '/elden-ring-compass/';
+
 export default defineConfig({
+  // When deploying to GitHub Pages the site lives at /<repo-name>/, so all
+  // asset and router paths are prefixed accordingly. Locally and on Vercel it
+  // stays at the root.
+  base: isGitHubPages ? GH_PAGES_BASE : '/',
   server: {
     port: 3005,
     strictPort: true,
