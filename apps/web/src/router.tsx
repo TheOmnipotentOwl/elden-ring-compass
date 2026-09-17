@@ -7,9 +7,12 @@ export const getRouter = () => {
   const router = createRouter({
     routeTree,
     context: {},
-    // Vite sets BASE_URL from the `base` config option so the router respects
-    // the /elden-ring-compass/ prefix when deployed to GitHub Pages.
-    basepath: import.meta.env.BASE_URL,
+    // During SSR / prerendering the Nitro server handles routes at '/' (root),
+    // so we use basepath '/' server-side and let the client pick up the real
+    // GitHub-Pages prefix (/elden-ring-compass/) from Vite's BASE_URL.
+    // import.meta.env.SSR is statically replaced by Vite: true in the SSR
+    // bundle, false in the client bundle — so each bundle gets the right value.
+    basepath: import.meta.env.SSR ? '/' : import.meta.env.BASE_URL,
     defaultNotFoundComponent: NotFound,
     // Shown in the content area while a route resolves (mainly lazy chunk loads,
     // since data comes from in-memory atoms not async loaders).
