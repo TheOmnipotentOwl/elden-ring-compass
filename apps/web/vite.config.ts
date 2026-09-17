@@ -28,13 +28,7 @@ const appOnlyPlugins = process.env.VITEST
   ? []
   : [
       devtools(),
-      tanstackStart({
-        prerender: {
-          enabled: isGitHubPages,
-          // Only prerender the root — client-side routing handles everything else.
-          routes: isGitHubPages ? ['/'] : undefined,
-        },
-      }),
+      tanstackStart(),
       nitro(
         process.env.VERCEL
           ? { output: { dir: path.resolve(import.meta.dirname, '../../.vercel/output') } }
