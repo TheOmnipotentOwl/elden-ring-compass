@@ -30,22 +30,22 @@ const GH_PAGES_BASE = '/elden-ring-compass/';
 const isGitHubPages = !!process.env.GITHUB_PAGES;
 const appOnlyPlugins = process.env.VITEST
   ? []
-  : [
-      devtools(),
-      tanstackStart({
-        prerender: {
-          enabled: isGitHubPages,
-          routes: isGitHubPages ? ['/'] : undefined,
-        },
-      }),
-      nitro(
-        process.env.VERCEL
-          ? { output: { dir: path.resolve(import.meta.dirname, '../../.vercel/output') } }
-          : isGitHubPages
-            ? { preset: 'static', baseURL: GH_PAGES_BASE }
-            : undefined,
-      ),
-    ];
+    : [
+            devtools(),
+            tanstackStart({
+                      prerender: {
+                                  enabled: isGitHubPages,
+                                  routes: isGitHubPages ? ['/'] : undefined,
+                      },
+            }),
+            nitro(
+                      process.env.VERCEL
+                        ? { output: { dir: path.resolve(import.meta.dirname, '../../.vercel/output') } }
+                        : isGitHubPages
+                          ? { preset: 'static', baseURL: GH_PAGES_BASE }
+                          : undefined,
+                    ),
+          ];
 
 // React Compiler (plugin-react v6 removed the inline babel option, so this runs via
 // @rolldown/plugin-babel). MUST come after viteReact() — the preset's rolldown filter only
@@ -53,34 +53,41 @@ const appOnlyPlugins = process.env.VITEST
 // VITEST for the same reason as appOnlyPlugins: tests run on the un-compiled source.
 const reactCompilerPlugins = process.env.VITEST
   ? []
-  : [babel({ presets: [reactCompilerPreset()] })];
+    : [babel({ presets: [reactCompilerPreset()] })];
 
 export default defineConfig({
-  // When deploying to GitHub Pages the site lives at /<repo-name>/, so all
-  // asset and router paths are prefixed accordingly. Locally and on Vercel it
-  // stays at the root.
-  base: isGitHubPages ? GH_PAGES_BASE : '/',
-  server: {
-    port: 3005,
-    strictPort: true,
-  },
-  build: {
-    // Item icons + their 80px thumbnails are resolved via `import.meta.glob(…, '?url')`
-    // in `@elden-ring-compass/data/images`. The thumbnails are <4KB, so Vite's default
-    // 4KB inline limit would base64-inline ~2.7k of them into the JS bundle (a ~9MB
-    // `images` chunk). Force every icon asset to emit as a real, HTTP-cacheable,
-    // lazily-fetched file instead. `undefined` = Vite's default for all other assets.
-    assetsInlineLimit: (filePath: string) =>
-      filePath.includes('/icons/items') ? false : undefined,
-  },
-  // `viteReact()` MUST come after `tanstackStart()` — the TanStack Router plugin (inside
-  // tanstackStart/appOnlyPlugins) has to run before the JSX transform. Under VITEST appOnlyPlugins
-  // is empty, so react ends up last either way.
-  plugins: [erDataTiles(), tailwindcss(), ...appOnlyPlugins, viteReact(), ...reactCompilerPlugins],
-  resolve: {
-    tsconfigPaths: true,
-    alias: {
-      '@': path.resolve(import.meta.dirname, './src'),
+    // When deploying to GitHub Pages the site lives at /<repo-name>/, so all
+                              // asset and router paths are prefixed accordingly. Locally and on Vercel it
+                              // stays at the root.
+                              base: isGitHubPages ? GH_PAGES_BASE : '/',
+    // Inject the GitHub Pages base path as a compile-time constant. This is more
+    // reliable than import.meta.env.BASE_URL in the SSR/Nitro bundle, because
+    // Vite replaces __GH_PAGES_BASE__ in its SSR pass (before Nitro bundles),
+    // so the string is baked in as a literal by the time Nitro sees the code.
+    define: {
+          __GH_PAGES_BASE__: JSON.stringify(isGitHubPages ? GH_PAGES_BASE : '/'),
     },
-  },
+    server: {
+          port: 3005,
+          strictPort: true,
+    },
+    build: {
+          // Item icons + their 80px thumbnails are resolved via `import.meta.glob(…, '?url')`
+      // in `@elden-ring-compass/data/images`. The thumbnails are <4KB, so Vite's default
+      // 4KB inline limit would base64-inline ~2.7k of them into the JS bundle (a ~9MB
+      // `images` chunk). Force every icon asset to emit as a real, HTTP-cacheable,
+      // lazily-fetched file instead. `undefined` = Vite's default for all other assets.
+      assetsInlineLimit: (filePath: string) =>
+              filePath.includes('/icons/items') ? false : undefined,
+    },
+    // `viteReact()` MUST come after `tanstackStart()` — the TanStack Router plugin (inside
+    // tanstackStart/appOnlyPlugins) has to run before the JSX transform. Under VITEST appOnlyPlugins
+    // is empty, so react ends up last either way.
+    plugins: [erDataTiles(), tailwindcss(), ...appOnlyPlugins, viteReact(), ...reactCompilerPlugins],
+    resolve: {
+          tsconfigPaths: true,
+          alias: {
+                  '@': path.resolve(import.meta.dirname, './src'),
+          },
+    },
 });
