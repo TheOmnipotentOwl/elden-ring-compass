@@ -37,7 +37,7 @@ const appOnlyPlugins = process.env.VITEST
                       process.env.VERCEL
                         ? { output: { dir: path.resolve(import.meta.dirname, '../../.vercel/output') } }
                         : isGitHubPages
-                          ? { preset: 'static', baseURL: GH_PAGES_BASE, prerender: { routes: ['/'], crawlLinks: true } }
+                          ? { preset: 'static', prerender: { routes: ['/'], crawlLinks: true } }
                           : undefined,
                     ),
           ];
