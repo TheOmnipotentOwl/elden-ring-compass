@@ -32,12 +32,7 @@ const appOnlyPlugins = process.env.VITEST
   ? []
     : [
             devtools(),
-            tanstackStart({
-                      prerender: {
-                                  enabled: isGitHubPages,
-                                  routes: isGitHubPages ? ['/'] : undefined,
-                      },
-            }),
+            tanstackStart(),
             nitro(
                       process.env.VERCEL
                         ? { output: { dir: path.resolve(import.meta.dirname, '../../.vercel/output') } }
@@ -83,7 +78,7 @@ export default defineConfig({
     // `viteReact()` MUST come after `tanstackStart()` — the TanStack Router plugin (inside
     // tanstackStart/appOnlyPlugins) has to run before the JSX transform. Under VITEST appOnlyPlugins
     // is empty, so react ends up last either way.
-    plugins: [erDataTiles(), tailwindcss(), ...appOnlyPlugins, viteReact(), ...reactCompilerPlugins],
+    plugins: [erDataTiles(), tailwindhcss(), ...appOnlyPlugins, viteReact(), ...reactCompilerPlugins],
     resolve: {
           tsconfigPaths: true,
           alias: {
