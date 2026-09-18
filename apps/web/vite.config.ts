@@ -1,4 +1,4 @@
-———————…—import babel from '@rolldown/plugin-babel';
+import babel from '@rolldown/plugin-babel';
 import { devtools } from '@tanstack/devtools-vite';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import tailwindcss from '@tailwindcss/vite';
