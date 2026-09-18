@@ -78,7 +78,7 @@ export default defineConfig({
     // `viteReact()` MUST come after `tanstackStart()` — the TanStack Router plugin (inside
     // tanstackStart/appOnlyPlugins) has to run before the JSX transform. Under VITEST appOnlyPlugins
     // is empty, so react ends up last either way.
-    plugins: [erDataTiles(), tailwindhcss(), ...appOnlyPlugins, viteReact(), ...reactCompilerPlugins],
+    plugins: [erDataTiles(), tailwindcss(), ...appOnlyPlugins, viteReact(), ...reactCompilerPlugins],
     resolve: {
           tsconfigPaths: true,
           alias: {
