@@ -41,6 +41,16 @@ export class EventDropError extends Data.TaggedError('EventDropError')<{
   readonly detail: string;
 }> {}
 
+/**
+ * Smallest entity id the trace may resolve through. `markers` is keyed by entity id
+ * ACROSS all maps, but tiny ids (1, 12, 18, 25, …) are map-local — many maps reuse them —
+ * and they also collide with the small ints that fill event args (slots, counts). Real
+ * placed entities carry large ids (≥ 1e6, e.g. 1043370740). Without this guard ~37
+ * base-game boss/award lots (crystal tears, Dragon Hearts, Black Knife, Gargoyle's
+ * Blackblade, …) resolved to unrelated parts on Land of Shadow tiles.
+ */
+const MIN_TRACED_ENTITY_ID = 1000;
+
 // Initialize (Common) Event opcodes — see `game/boss-names.ts`.
 const RUN_BANK = 2000;
 const RUN_EVENT = 0; // RunEvent (same-file target)
@@ -165,10 +175,11 @@ export const loadEventDropLocations = (
               enabledFlags.push(flag);
           }
           // Body-entity scan: any raw int32 that is a placed CHARACTER marker. Safe because
-          // real (10-digit) entity ids never collide with flags/other args; `id > 0` excludes
-          // the ubiquitous 0 (and any unnamed entity-0 marker).
+          // real (10-digit) entity ids never collide with flags/other args; the
+          // MIN_TRACED_ENTITY_ID floor excludes 0 and the small map-local ids that do.
           for (const v of argInts(ins.argData)) {
-            if (v > 0 && markers.get(v)?.isCharacter) bodyChars.add(v);
+            if (v >= MIN_TRACED_ENTITY_ID && markers.get(v)?.isCharacter)
+              bodyChars.add(v);
           }
         }
         for (const flag of enabledFlags) {
@@ -188,7 +199,7 @@ export const loadEventDropLocations = (
       ids: Iterable<number>,
     ): { e: number; m: MarkerCoord } | undefined => {
       const resolved = [...ids].flatMap((e) => {
-        const m = markers.get(e);
+        const m = e >= MIN_TRACED_ENTITY_ID ? markers.get(e) : undefined;
         return m ? [{ e, m }] : [];
       });
       // Prefer the encounter character (invader/boss) over leash/trigger regions.

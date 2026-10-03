@@ -40,7 +40,12 @@ export interface LotItem {
   readonly itemType: ItemType;
   readonly quantity: number;
   readonly chance: number; // 0..1, basePoint / lot total
-  readonly getItemFlagId: number; // pickup event flag (0 if none); save-aware tracking
+  /**
+   * Pickup event flag (0 if none) — the slot's own `getItemFlagId0N`, else the
+   * lot-wide `getItemFlagId`. The game sets it when the item is picked up and never
+   * awards it again, so non-zero = one-time pickup, 0 = respawning / farmable.
+   */
+  readonly getItemFlagId: number;
 }
 
 const num = (row: ReadonlyMap<string, RowValue>, key: string): number => {
@@ -73,6 +78,7 @@ export const loadItemLots = (
       for (let i = 1; i <= 8; i++) {
         total += num(row, `lotItemBasePoint0${i}`);
       }
+      const lotFlag = num(row, 'getItemFlagId');
       const items: LotItem[] = [];
       for (let i = 1; i <= 8; i++) {
         const itemId = num(row, `lotItemId0${i}`);
@@ -83,7 +89,7 @@ export const loadItemLots = (
           itemType: CATEGORY[num(row, `lotItemCategory0${i}`)] ?? 'unknown',
           quantity: num(row, `lotItemNum0${i}`),
           chance: total > 0 ? basePoint / total : 0,
-          getItemFlagId: num(row, `getItemFlagId0${i}`),
+          getItemFlagId: num(row, `getItemFlagId0${i}`) || lotFlag,
         });
       }
       if (items.length > 0) out.set(r.id, items);

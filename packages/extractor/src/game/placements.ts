@@ -56,6 +56,12 @@ export interface Placement {
   readonly quantity: number;
   readonly chance: number; // 0..1 within the lot
   readonly source: 'enemy' | 'map' | 'event';
+  /**
+   * Pickup event flag (`ItemLotParam.getItemFlagId*`, see `item-lots.ts`). Non-zero =
+   * a one-time pickup: the save's event-flag bitfield has it set once THIS lot was
+   * collected, independent of inventory. 0 = respawning / farmable (no flag).
+   */
+  readonly flagId: number;
 }
 
 const num = (row: ReadonlyMap<string, RowValue>, key: string): number => {
@@ -141,6 +147,7 @@ export const loadPlacements = (
             itemType: it.itemType,
             quantity: it.quantity,
             chance: it.chance,
+            flagId: it.getItemFlagId,
             source: 'enemy',
           });
         }
@@ -165,6 +172,7 @@ export const loadPlacements = (
           itemType: it.itemType,
           quantity: it.quantity,
           chance: it.chance,
+          flagId: it.getItemFlagId,
           source: 'map',
         });
       }
@@ -248,6 +256,7 @@ export const loadPlacements = (
           itemType: it.itemType,
           quantity: it.quantity,
           chance: it.chance,
+          flagId: it.getItemFlagId,
           source: 'event',
         });
       }

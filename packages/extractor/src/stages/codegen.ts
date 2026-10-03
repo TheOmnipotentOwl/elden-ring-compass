@@ -246,6 +246,7 @@ export const renderPlacementsFile = (
       'readonly quantity: number;',
       'readonly chance: number;',
       'readonly source: string;',
+      'readonly flagId: number;',
     ],
     'PLACEMENTS',
     placements.map((p) => ({ ...p })),
