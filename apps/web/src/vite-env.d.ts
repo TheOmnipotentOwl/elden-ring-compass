@@ -27,3 +27,6 @@ declare module '*.webp' {
 
 /** `/map-tiles/{version}` — see `vite-plugins/er-data-tiles.ts` and `@/lib/map-tiles`. */
 declare const __ER_MAP_TILES_BASE__: string;
+
+/** True for the static GitHub Pages build (`PAGES_BASE_PATH` set) — see `vite.config.ts`. */
+declare const __PAGES_BUILD__: boolean;

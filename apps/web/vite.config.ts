@@ -21,11 +21,25 @@ import { erDataTiles } from './vite-plugins/er-data-tiles.ts';
 // the Build Output API to `.vercel/output` (NOT `.output`). In a monorepo Vercel only auto-detects
 // that dir at the REPO ROOT, but Nitro writes it relative to its cwd (apps/web) — so redirect the
 // output up two levels. Locally (no VERCEL) the default node-server preset + `.output` is untouched.
+// GitHub Pages (static hosting, no server): set `PAGES_BASE_PATH` to the site's sub-path
+// (`/<repo>/` for a project page, `/` for a user/org page). Vite's `base` follows it, and
+// TanStack Start derives the router basepath from that. The build switches to Start's SPA
+// mode: all routing is client-side (the app has no server functions/loaders), and the build
+// prerenders one HTML shell, `.output/public/_shell.html`. The deploy step
+// (.github/workflows/pages.yml) publishes `.output/public` as-is, with that shell copied to
+// `index.html` + `404.html` (the Pages SPA fallback). Nitro keeps its default node-server
+// preset here on purpose: Start's shell prerender runs against Nitro's preview server, and
+// the static `github-pages` preset has no server to answer it under a base path.
+// Unset = the normal SSR build (Vercel / node-server), unchanged.
+const PAGES_BASE_PATH = process.env.PAGES_BASE_PATH;
+
 const appOnlyPlugins = process.env.VITEST
   ? []
   : [
       devtools(),
-      tanstackStart({ prerender: { enabled: false } }),
+      PAGES_BASE_PATH
+        ? tanstackStart({ spa: { enabled: true } })
+        : tanstackStart({ prerender: { enabled: false } }),
       nitro({
         // Files under `public/` aren't fingerprinted, so Nitro/Vercel serve them
         // `max-age=0, must-revalidate` — every map pan re-validated every tile (one billed edge
@@ -53,6 +67,8 @@ const reactCompilerPlugins = process.env.VITEST
   : [babel({ presets: [reactCompilerPreset()] })];
 
 export default defineConfig({
+  ...(PAGES_BASE_PATH ? { base: PAGES_BASE_PATH } : {}),
+  define: { __PAGES_BUILD__: JSON.stringify(Boolean(PAGES_BASE_PATH)) },
   server: {
     port: 3005,
     strictPort: true,
