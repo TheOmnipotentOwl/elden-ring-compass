@@ -6,7 +6,9 @@ import { useMemo } from 'react';
 
 import { useSelectedSlot } from '@/stores/slot-selection-store';
 import { CATALOG, TABLE_PLACEMENT_TYPE, type InventoryTableType } from './inventory-catalog-data';
+import { usePickupFlags } from './use-pickup-flags';
 import { inventoryDbView } from './vm/inventory';
+import { pickupState } from './vm/item-pickups';
 import { itemPins } from './vm/map-pins';
 
 export { CATALOG, TABLE_PLACEMENT_TYPE, type InventoryTableType } from './inventory-catalog-data';
@@ -21,6 +23,13 @@ export type WithOwnership<T> = T & {
   // How many overworld pins selecting this row drops on the map — the visible
   // "Locations" column. `hasCoords === (locationCount > 0)`.
   locationCount: number;
+  // Distinct one-time pickups behind those pins (distinct non-zero pickup flags — one flag
+  // can back several pins, e.g. a multi-phase NPC placed at each quest position) and how
+  // many of THOSE the save has collected — from event flags, not inventory.
+  oneTimeLocationCount: number;
+  pickedUpCount: number;
+  // Whether `pickedUpCount` was read from save flags (false: no save, or a shared link).
+  pickupKnown: boolean;
 };
 
 /** Broad shape every joined row satisfies (used where the category isn't statically known). */
@@ -44,6 +53,7 @@ export type InventoryTableResult = {
  */
 export function useInventoryTables(): Record<InventoryTableType, InventoryTableResult> {
   const slot = useSelectedSlot();
+  const pickupFlags = usePickupFlags();
 
   return useMemo(() => {
     const owned = new Map<number, { quantity: number; upgradeLevel: number }>();
@@ -73,7 +83,15 @@ export function useInventoryTables(): Record<InventoryTableType, InventoryTableR
         .map((row) => {
           const o = owned.get(row.id);
           const weaponUpgradeLevel = o?.upgradeLevel ?? 0;
-          const locationCount = itemPins(placementType, row.id).length;
+          const pins = itemPins(placementType, row.id);
+          const locationCount = pins.length;
+          const oneTimeFlags = new Set<number>();
+          const pickedFlags = new Set<number>();
+          for (const pin of pins) {
+            if (pin.flagId === 0) continue;
+            oneTimeFlags.add(pin.flagId);
+            if (pickupState(pin, pickupFlags) === 'picked-up') pickedFlags.add(pin.flagId);
+          }
           return {
             ...row,
             quantity: o?.quantity ?? 0,
@@ -82,6 +100,9 @@ export function useInventoryTables(): Record<InventoryTableType, InventoryTableR
               weaponUpgradeLevel > 0 ? `${row.name} +${weaponUpgradeLevel.toString()}` : row.name,
             hasCoords: locationCount > 0,
             locationCount,
+            oneTimeLocationCount: oneTimeFlags.size,
+            pickedUpCount: pickedFlags.size,
+            pickupKnown: pickupFlags !== undefined,
           };
         });
       return { items, ownedCount: items.filter((i) => i.quantity > 0).length };
@@ -93,5 +114,5 @@ export function useInventoryTables(): Record<InventoryTableType, InventoryTableR
         join(rows, TABLE_PLACEMENT_TYPE[key as InventoryTableType]),
       ]),
     ) as Record<InventoryTableType, InventoryTableResult>;
-  }, [slot]);
+  }, [slot, pickupFlags]);
 }

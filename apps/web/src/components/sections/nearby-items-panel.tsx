@@ -4,7 +4,10 @@
  * player's current save position so a user serving their save over the local
  * HTTP server can check, after each save, that they aren't leaving anything
  * behind before moving on. Recomputes automatically when the save reloads
- * (it derives from the player pin + catalog ownership).
+ * (it derives from the player pin + each pickup's event flag in the save).
+ *
+ * "Left behind" is per LOCATION: a placement is hidden once its own pickup flag
+ * is set (`lib/vm/item-pickups.ts`), not when you merely own a copy of the item.
  *
  * Spatial model: master-pixel space, where 1 px = 1 world-unit (≈1 m) — see
  * `map-affine.ts` — so a radius in "meters" is a plain pixel-distance check
@@ -27,6 +30,8 @@ import {
   useInventoryTables,
 } from '@/lib/inventory-catalog';
 import { cn } from '@/lib/utils';
+import { usePickupFlags } from '@/lib/use-pickup-flags';
+import { pickupState } from '@/lib/vm/item-pickups';
 import { ALL_ITEM_PINS, type PlacedItemPin } from '@/lib/vm/map-pins';
 
 import { useRowSelectionControls, useTableStateMap } from '../data-table/data-table-store';
@@ -62,15 +67,18 @@ interface NearbyEntry {
   source: string;
   chance: number;
   approx: boolean;
+  /** The nearest placement has no pickup flag — a farmable / respawning drop. */
+  respawns: boolean;
 }
 
 function useNearbyItems(
   playerPin: MapPin | null,
   radius: number,
-  includeOwned: boolean,
+  includePickedUp: boolean,
   includeChanceDrops: boolean,
 ): NearbyEntry[] {
   const allTables = useInventoryTables();
+  const eventFlags = usePickupFlags();
 
   // (placement type, item id) → catalog row + which table owns it. Tables can
   // share a placement type (all the goods tables), but an id resolves to one row.
@@ -103,6 +111,13 @@ function useNearbyItems(
       const d2 = dx * dx + dy * dy;
       if (d2 > r2) continue;
       const k = `${pin.itemType}:${pin.itemId.toString()}`;
+      if (!includePickedUp) {
+        // Already collected from THIS spot (its lot flag is set in the save). When the
+        // flags can't be read (shared link, untracked lot), fall back to ownership.
+        const state = pickupState(pin, eventFlags);
+        if (state === 'picked-up') continue;
+        if (state === 'unknown' && (rowByKey.get(k)?.row.quantity ?? 0) > 0) continue;
+      }
       const cur = best.get(k);
       if (!cur) best.set(k, { pin, d2, dx, dy, count: 1 });
       else {
@@ -114,7 +129,6 @@ function useNearbyItems(
     for (const [key, { pin, d2, dx, dy, count }] of best) {
       const hit = rowByKey.get(key);
       if (!hit) continue;
-      if (!includeOwned && hit.row.quantity > 0) continue;
       entries.push({
         key,
         tableId: hit.tableId,
@@ -125,10 +139,11 @@ function useNearbyItems(
         source: pin.source,
         chance: pin.chance,
         approx: pin.approx,
+        respawns: pickupState(pin, eventFlags) === 'respawns',
       });
     }
     return entries.toSorted((a, b) => a.distance - b.distance);
-  }, [playerPin, radius, includeOwned, includeChanceDrops, rowByKey]);
+  }, [playerPin, radius, includePickedUp, includeChanceDrops, rowByKey, eventFlags]);
 }
 
 function entryMeta(e: NearbyEntry): string {
@@ -138,6 +153,7 @@ function entryMeta(e: NearbyEntry): string {
     e.chance < 1 ? `${source} ${Math.round(e.chance * 100).toString()}%` : source,
   ];
   if (e.nearbyCount > 1) parts.push(`×${e.nearbyCount.toString()}`);
+  if (e.respawns) parts.push('respawns');
   if (e.row.quantity > 0) parts.push('owned');
   return parts.join(' · ');
 }
@@ -150,11 +166,11 @@ export function NearbyItemsPanel({
   slotConnected: boolean;
 }) {
   const [radius, setRadius] = useState<number>(DEFAULT_RADIUS);
-  const [includeOwned, setIncludeOwned] = useState(false);
+  const [includePickedUp, setIncludePickedUp] = useState(false);
   const [includeChanceDrops, setIncludeChanceDrops] = useState(true);
   // Defer the scan/regroup while the slider is dragged; the label stays live.
   const deferredRadius = useDeferredValue(radius);
-  const entries = useNearbyItems(playerPin, deferredRadius, includeOwned, includeChanceDrops);
+  const entries = useNearbyItems(playerPin, deferredRadius, includePickedUp, includeChanceDrops);
   const tableState = useTableStateMap();
   const { setRowSelection } = useRowSelectionControls();
   const shown = entries.slice(0, MAX_ROWS);
@@ -207,15 +223,15 @@ export function NearbyItemsPanel({
             />
           </label>
           <label
-            htmlFor='nearby-include-owned'
-            title='Include items you already own'
+            htmlFor='nearby-include-picked-up'
+            title='Include pickups you already collected from that exact spot'
             className='flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground select-none'
           >
-            Owned
+            Picked up
             <Switch
-              id='nearby-include-owned'
-              checked={includeOwned}
-              onCheckedChange={setIncludeOwned}
+              id='nearby-include-picked-up'
+              checked={includePickedUp}
+              onCheckedChange={setIncludePickedUp}
             />
           </label>
         </div>
@@ -232,8 +248,8 @@ export function NearbyItemsPanel({
         </p>
       ) : entries.length === 0 ? (
         <p className='text-xs text-muted-foreground'>
-          Nothing {includeOwned ? 'placeable' : 'uncollected'} within {deferredRadius}m. Try a wider
-          radius.
+          Nothing {includePickedUp ? 'placeable' : 'left to pick up'} within {deferredRadius}m. Try
+          a wider radius.
         </p>
       ) : (
         <>

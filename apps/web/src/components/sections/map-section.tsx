@@ -18,6 +18,7 @@ import {
   LayersIcon,
   LocateFixedIcon,
   MapPinIcon,
+  PackageCheckIcon,
   PackageIcon,
   PackageSearchIcon,
   SkullIcon,
@@ -41,6 +42,8 @@ import {
 import { BADGE_LABEL, bossBadges, bossMapName, bossReward } from '@/lib/boss-meta';
 import { playerToMasterPixel } from '@/lib/map-affine';
 import { mapManifestAtom, mapTileIndexAtom } from '@/lib/map-tiles';
+import { usePickupFlags } from '@/lib/use-pickup-flags';
+import { PICKUP_STATUS_LABEL, pickupState } from '@/lib/vm/item-pickups';
 import { bossMapIdByFlag, bossPinByFlag, itemPins } from '@/lib/vm/map-pins';
 import { useSelectedSlot } from '@/stores/slot-selection-store';
 
@@ -102,6 +105,8 @@ function MapRightRail({
   defaultControlsOpen,
   layers,
   onLayerChange,
+  hidePickedUp,
+  onHidePickedUpChange,
   onQuickSelect,
   onClearPins,
   pinCount,
@@ -111,6 +116,8 @@ function MapRightRail({
   defaultControlsOpen: boolean;
   layers: Record<LayerKey, boolean>;
   onLayerChange: (key: LayerKey, visible: boolean) => void;
+  hidePickedUp: boolean;
+  onHidePickedUpChange: (hide: boolean) => void;
   onQuickSelect: (type: 'grace' | 'boss', on: boolean) => void;
   onClearPins: () => void;
   pinCount: number;
@@ -173,6 +180,19 @@ function MapRightRail({
                   />
                 </label>
               ))}
+              {/* Per-location: hides a pickup once THAT spot's lot flag is set in the
+                  save, regardless of whether the item is still in the inventory. */}
+              <label className='flex cursor-pointer items-center gap-2 text-sm select-none'>
+                <PackageCheckIcon
+                  className={cn('size-4 text-muted-foreground', !hidePickedUp && 'opacity-40')}
+                />
+                Hide picked-up items
+                <Switch
+                  className='ml-auto'
+                  checked={hidePickedUp}
+                  onCheckedChange={onHidePickedUpChange}
+                />
+              </label>
             </div>
           </div>
           <div className='border-t border-border pt-2.5'>
@@ -279,8 +299,14 @@ function MapLegendOverlay({ defaultOpen }: { defaultOpen: boolean }) {
         </span>
         <span className='flex items-center gap-1'>
           <MapPinGlyph className='size-3.5' style={{ color: '#3cbfdb' }} filled />
-          <MapPinGlyph className='size-3.5' style={{ color: '#356e7a' }} filled /> Items (collected
-          / not collected)
+          <MapPinGlyph className='size-3.5' style={{ color: '#356e7a' }} filled /> Items (picked up
+          here / not yet)
+        </span>
+        <span className='flex items-center gap-1.5'>
+          <span className='flex size-4 items-center justify-center rounded-full border border-white bg-[#356e7a] text-[8px] font-bold text-white'>
+            5
+          </span>
+          Nearby pins (click to expand)
         </span>
         <span className='flex items-center gap-1.5'>
           <span className='size-2.5 rounded-full bg-amber-500 ring-2 ring-amber-500/40' /> You are
@@ -323,6 +349,7 @@ function useSelectedPins(): MapPin[] {
   const tableState = useTableStateMap();
   const eventsItems = useDataTableData('events');
   const allTables = useInventoryTables();
+  const eventFlags = usePickupFlags();
 
   return useMemo(() => {
     // Defeat state by flag, so bosses-table pins (which only know the flag) get the
@@ -394,26 +421,34 @@ function useSelectedPins(): MapPin[] {
           if (!row) return [];
           const locations = itemPins(type, row.id);
           const owned = row.quantity > 0;
-          return locations.map((p) => ({
-            kind: 'item',
-            name: row.name,
-            wikiName: wikiNameForItem(row) ?? undefined,
-            category: p.source === 'map' ? 'Treasure' : p.approx ? 'Drop · approx. area' : 'Drop',
-            description: '',
-            discovered: owned, // owned → brighter "collected" shade
-            sourceLabel:
-              p.source === 'map' ? 'Treasure' : p.approx ? 'Drop · approx. area' : 'Drop',
-            chancePct: p.chance < 1 ? Math.round(p.chance * 100) : undefined,
-            quantity: row.quantity,
-            locationCount: locations.length,
-            status: owned ? 'Collected' : 'Not collected',
-            master: p.master,
-            px: p.px,
-            py: p.py,
-          }));
+          return locations.map((p) => {
+            // Collected-ness is per LOCATION — this spot's pickup flag in the save —
+            // not "you own a copy somewhere" (see lib/vm/item-pickups.ts). When the flags
+            // can't be read (shared link, untracked lot), fall back to ownership.
+            const pickup = pickupState(p, eventFlags);
+            const collected = pickup === 'unknown' ? owned : pickup === 'picked-up';
+            return {
+              kind: 'item',
+              name: row.name,
+              wikiName: wikiNameForItem(row) ?? undefined,
+              category: p.source === 'map' ? 'Treasure' : p.approx ? 'Drop · approx. area' : 'Drop',
+              description: '',
+              discovered: collected, // collected → brighter shade
+              pickup,
+              sourceLabel:
+                p.source === 'map' ? 'Treasure' : p.approx ? 'Drop · approx. area' : 'Drop',
+              chancePct: p.chance < 1 ? Math.round(p.chance * 100) : undefined,
+              quantity: row.quantity,
+              locationCount: locations.length,
+              status: pickup === 'unknown' && owned ? 'Owned' : PICKUP_STATUS_LABEL[pickup],
+              master: p.master,
+              px: p.px,
+              py: p.py,
+            };
+          });
         }),
     );
-  }, [tableState, eventsItems, allTables]);
+  }, [tableState, eventsItems, allTables, eventFlags]);
 }
 
 /** "You are here" pin from the active save's player position (overworld only). */
@@ -490,6 +525,8 @@ export function MapSection({ embedded = false }: { embedded?: boolean } = {}) {
     bosses: true,
     items: true,
   });
+  // Hide item pins whose pickup flag is set (collected from that exact spot).
+  const [hidePickedUp, setHidePickedUp] = useState(true);
   // Bumped to ask the map to recenter on the player ("center on me").
   const [recenterToken, setRecenterToken] = useState(0);
 
@@ -502,8 +539,11 @@ export function MapSection({ embedded = false }: { embedded?: boolean } = {}) {
   const bloodstainPin = useBloodstainPin();
   const slotConnected = !!useSelectedSlot();
   const visiblePins = useMemo(
-    () => pins.filter((p) => layers[pinLayer(p.category)]),
-    [pins, layers],
+    () =>
+      pins.filter(
+        (p) => layers[pinLayer(p.category)] && !(hidePickedUp && p.pickup === 'picked-up'),
+      ),
+    [pins, layers, hidePickedUp],
   );
   // Selected-pin counts per realm, surfaced as badges on the map switcher so a
   // pin dropped on a non-active map is never a silent no-op. Counts what would
@@ -522,6 +562,19 @@ export function MapSection({ embedded = false }: { embedded?: boolean } = {}) {
         ? []
         : [...pinCountByMaster.entries()].toSorted((a, b) => b[1] - a[1]),
     [pinCountByMaster, activeMapId],
+  );
+  // Selected pins on the active map hidden ONLY by "Hide picked-up items" — surfaced as a
+  // chip so pinning a collected spot (e.g. from Nearby with "Picked up" on) isn't a silent
+  // no-op.
+  const hiddenPickedUp = useMemo(
+    () =>
+      hidePickedUp
+        ? pins.filter(
+            (p) =>
+              p.master === activeMapId && layers[pinLayer(p.category)] && p.pickup === 'picked-up',
+          ).length
+        : 0,
+    [pins, layers, hidePickedUp, activeMapId],
   );
   const eventsItems = useDataTableData('events');
   const { setRowSelection, clearAllRowSelection: clearPins } = useRowSelectionControls();
@@ -636,12 +689,25 @@ export function MapSection({ embedded = false }: { embedded?: boolean } = {}) {
                   switch
                 </Button>
               ))}
+              {hiddenPickedUp > 0 && (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  className={OVERLAY_BUTTON}
+                  onClick={() => setHidePickedUp(false)}
+                >
+                  <PackageCheckIcon className='size-3.5 text-muted-foreground' />
+                  {hiddenPickedUp} picked-up pin{hiddenPickedUp === 1 ? '' : 's'} hidden — show
+                </Button>
+              )}
             </div>
 
             <MapRightRail
               defaultControlsOpen={!isMobile}
               layers={layers}
               onLayerChange={(key, visible) => setLayers((l) => ({ ...l, [key]: visible }))}
+              hidePickedUp={hidePickedUp}
+              onHidePickedUpChange={setHidePickedUp}
               onQuickSelect={selectEvents}
               onClearPins={clearPins}
               pinCount={pins.length}

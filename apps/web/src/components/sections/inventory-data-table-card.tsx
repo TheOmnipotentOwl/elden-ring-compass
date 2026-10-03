@@ -357,6 +357,44 @@ function defaultColumns<T extends BaseRow>(
         );
       },
     }),
+    // Per-location pickups collected (save event flags), out of the item's one-time spots.
+    // "—" = every location is a farmable / respawning drop (no pickup flag).
+    commonAccessorColumnDef(columnHelper, 'pickedUpCount', 'Picked up', {
+      size: 120,
+      cell: (cell: DataTableCellContext<BaseRow>) => {
+        const { locationCount, pickedUpCount, oneTimeLocationCount, pickupKnown } =
+          cell.row.original;
+        const dash = (title: string) => (
+          <span className='text-muted-foreground/40' title={title}>
+            —
+          </span>
+        );
+        if (locationCount === 0) return dash('No map location');
+        if (oneTimeLocationCount === 0) return dash('Respawning / farmable only');
+        const pickups = `one-time pickup${oneTimeLocationCount === 1 ? '' : 's'}`;
+        if (!pickupKnown) {
+          return (
+            <span
+              className='text-muted-foreground/60 tabular-nums'
+              title={`${oneTimeLocationCount} ${pickups} — load your own save to see which are picked up`}
+            >
+              –/{oneTimeLocationCount}
+            </span>
+          );
+        }
+        return (
+          <span
+            title={`Picked up ${pickedUpCount} of ${oneTimeLocationCount} ${pickups}`}
+            className={cn(
+              'tabular-nums',
+              pickedUpCount === oneTimeLocationCount && 'text-muted-foreground',
+            )}
+          >
+            {pickedUpCount}/{oneTimeLocationCount}
+          </span>
+        );
+      },
+    }),
     // Cast: columns built against BaseRow are structurally valid for the caller's narrower T
   ] as unknown as Array<DataTableColumnDef<T>>;
 }
