@@ -38,12 +38,77 @@ export function pickupState(
   return isEventFlagSet(flags, pin.flagId) ? 'picked-up' : 'available';
 }
 
-export const PICKUP_STATUS_LABEL: Record<PickupState, string> = {
-  'picked-up': 'Picked up',
-  available: 'Not picked up',
-  respawns: 'Respawns (farmable)',
-  unknown: 'One-time pickup',
+/**
+ * Whether a pickup counts as collected: its flag when the save has one for it; otherwise
+ * (shared link, untracked lot) inventory ownership. `undefined` = can't tell (no save).
+ */
+export function isCollected(
+  state: PickupState,
+  owned: boolean,
+  hasSave: boolean,
+): boolean | undefined {
+  if (state === 'respawns') return undefined;
+  if (state === 'picked-up') return true;
+  if (state === 'available') return false;
+  return hasSave ? owned : undefined;
+}
+
+/**
+ * The one status line every item pin uses, so the wording never mixes vocabularies:
+ * "Farmable (respawns)" for repeatable drops; with a save, "Picked up" / "Not picked up"
+ * for everything one-time; without one, "One-time pickup".
+ */
+export function pickupStatusLabel(state: PickupState, owned: boolean, hasSave: boolean): string {
+  if (state === 'respawns') return 'Farmable (respawns)';
+  const collected = isCollected(state, owned, hasSave);
+  if (collected === undefined) return 'One-time pickup';
+  return collected ? 'Picked up' : 'Not picked up';
+}
+
+/**
+ * Item-location filters behind the map's item quick-selects. They narrow WHICH
+ * locations of a pinned item show — e.g. "Farmable items" pins every item that has a
+ * farmable drop, but only its farmable spots.
+ */
+export type ItemFilter =
+  | 'all'
+  | 'farmable'
+  | 'one-time'
+  | 'not-collected'
+  | 'not-collected-one-time'
+  | 'boss-drops';
+
+export const ITEM_FILTER_LABEL: Record<ItemFilter, string> = {
+  all: 'All item locations',
+  farmable: 'Farmable items',
+  'one-time': 'One-time pickups',
+  'not-collected': 'Not collected (incl. farmable)',
+  'not-collected-one-time': 'Not collected (excl. farmable)',
+  'boss-drops': 'Boss drops',
 };
+
+export function matchesItemFilter(
+  filter: ItemFilter,
+  pin: Pick<ItemPin, 'bossDrop'>,
+  state: PickupState,
+  owned: boolean,
+  hasSave: boolean,
+): boolean {
+  switch (filter) {
+    case 'all':
+      return true;
+    case 'farmable':
+      return state === 'respawns';
+    case 'one-time':
+      return state !== 'respawns';
+    case 'not-collected':
+      return state === 'respawns' || isCollected(state, owned, hasSave) !== true;
+    case 'not-collected-one-time':
+      return state !== 'respawns' && isCollected(state, owned, hasSave) !== true;
+    case 'boss-drops':
+      return pin.bossDrop;
+  }
+}
 
 export interface PickupSummary {
   /** One-time pickup pins (everything that doesn't respawn), total. */

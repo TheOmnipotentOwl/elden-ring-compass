@@ -383,16 +383,25 @@ function PinPopupBody({ pin }: { pin: MapPin }) {
 }
 
 /**
- * Group pins of the same kind (grace / boss / item) that sit on the same spot. Master
- * pixels are 1 world-unit (≈1 m), so rounding to the pixel merges exact co-locations —
- * every item of one treasure lot / one enemy's drop table shares its Part's coords —
- * without merging neighbours. Kinds never share a stack: a boss and its drops at one spot
- * stay a boss pin plus an item stack. Returns `[key, pins]`, the key unique per stack.
+ * Which pins may merge (stack or cluster): same kind (grace / boss / item) AND same
+ * found-state (discovered / defeated / picked up vs. not) — so a merged badge never hides
+ * an outstanding pin behind a done one.
+ */
+function mergeGroup(pin: MapPin): string {
+  return `${pin.kind}:${pin.discovered === true ? 'done' : 'open'}`;
+}
+
+/**
+ * Group pins of the same {@link mergeGroup} that sit on the same spot. Master pixels are
+ * 1 world-unit (≈1 m), so rounding to the pixel merges exact co-locations — every item of
+ * one treasure lot / one enemy's drop table shares its Part's coords — without merging
+ * neighbours. A boss and its drops at one spot stay a boss pin plus an item stack.
+ * Returns `[key, pins]`, the key unique per stack.
  */
 function groupByLocation(pins: readonly MapPin[]): Array<[string, MapPin[]]> {
   const groups = new Map<string, MapPin[]>();
   for (const pin of pins) {
-    const key = `${pin.kind}:${Math.round(pin.px).toString()}:${Math.round(pin.py).toString()}`;
+    const key = `${mergeGroup(pin)}:${Math.round(pin.px).toString()}:${Math.round(pin.py).toString()}`;
     const group = groups.get(key);
     if (group) group.push(pin);
     else groups.set(key, [pin]);
@@ -414,29 +423,26 @@ function PinGroupTooltipBody({ pins }: { pins: readonly MapPin[] }) {
   );
 }
 
+/** Grid cell size (screen px) for spread pins — a 24px teardrop plus a gap. */
+const SPREAD_CELL_PX = 30;
+
 /**
- * Screen-pixel offsets that fan `n` stacked pins out around their shared point —
- * Leaflet.markercluster's "spiderfy" geometry (a circle for small stacks, an
- * Archimedean spiral beyond 8), with spacing widened for our 24px teardrops.
+ * Screen-pixel offsets laying `n` stacked pins out on a compact, near-square grid
+ * centred on their shared point (row by row; a partial last row is centred). Offsets are
+ * for the pins' anchor (the teardrop tip), shifted down half an icon so the icons —
+ * which sit above their tip — read as centred on the spot.
  */
-function spiderOffsets(n: number): Array<readonly [number, number]> {
-  if (n <= 8) {
-    const legLength = Math.max(30, (34 * (2 + n)) / (2 * Math.PI));
-    const step = (2 * Math.PI) / n;
-    return Array.from({ length: n }, (_, i) => {
-      const angle = Math.PI / 6 + i * step;
-      return [legLength * Math.cos(angle), legLength * Math.sin(angle)] as const;
-    });
-  }
-  const out: Array<readonly [number, number]> = [];
-  let legLength = 30;
-  let angle = 0;
-  for (let i = 0; i < n; i++) {
-    angle += 34 / legLength + i * 0.0005;
-    out.push([legLength * Math.cos(angle), legLength * Math.sin(angle)]);
-    legLength += (2 * Math.PI * 6) / angle;
-  }
-  return out;
+function spreadOffsets(n: number): Array<readonly [number, number]> {
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  return Array.from({ length: n }, (_, i) => {
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+    const inRow = row === rows - 1 ? n - cols * (rows - 1) : cols;
+    const x = (col - (inRow - 1) / 2) * SPREAD_CELL_PX;
+    const y = (row - (rows - 1) / 2) * SPREAD_CELL_PX + 11;
+    return [x, y] as const;
+  });
 }
 
 /** Small hub dot left at a spread stack's true location (legs radiate from it). */
@@ -473,8 +479,11 @@ function SinglePinMarker({
   );
 }
 
-/** Screen-space radius (px) within which nearby spots merge into one zoom-out cluster. */
-const CLUSTER_RADIUS_PX = 40;
+/**
+ * Screen-space radius (px) within which nearby spots of one {@link mergeGroup} merge into a
+ * count badge. Deliberately tight — only pins that would visibly sit on top of each other.
+ */
+const CLUSTER_RADIUS_PX = 4;
 
 /** Pins on one exact spot (see {@link groupByLocation}). */
 interface Spot {
@@ -588,55 +597,88 @@ function ClusterTooltipBody({ pins }: { pins: readonly MapPin[] }) {
  * cost — low when zoomed out):
  *   1. **Clusters**: spots within {@link CLUSTER_RADIUS_PX} screen pixels at the current
  *      zoom merge into one round count badge (at every zoom, max included). Clicking it
- *      zooms to fit its spots when that would separate them, else spiderfies it in place.
+ *      zooms to fit its spots when that would separate them, else spreads it in place.
  *   2. **Same-spot stacks**: pins on one exact spot render as ONE numbered teardrop;
- *      clicking it "spiderfies" the stack — each pin fans out on a leg (individually
- *      hoverable/clickable) — and any click on the map itself, or a zoom, collapses it.
- *      Marker clicks don't bubble to the map in Leaflet, so opening a spread pin's popup
- *      keeps the stack open.
+ *      clicking it spreads the stack into a grid (each pin individually hoverable /
+ *      clickable), and any click on the map itself, or a zoom, collapses it. Marker
+ *      clicks don't bubble to the map in Leaflet, so opening a spread pin's popup keeps
+ *      the stack open.
+ * Only pins of one {@link mergeGroup} ever merge. Markers outside the (padded) viewport
+ * aren't rendered at all — item quick-selects can pin thousands of locations.
  */
 function MarkerLayer({ pins, zoom }: { pins: MapPin[]; zoom: number }) {
   const map = useMap();
   const [mapZoom, setMapZoom] = useState(() => map.getZoom());
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  // Spider offsets are in screen pixels, so a zoom would distort the fan — collapse like
+  // Rendered area: the viewport plus a margin, refreshed after every pan/zoom.
+  // Bumped whenever the visible area may have changed; the rendered area is read from the
+  // map itself when it does. (Capturing bounds once at mount went stale: the map isn't
+  // sized/fitted yet then, which left a first load with no markers until the first zoom.)
+  const [viewTick, setViewTick] = useState(0);
+  const bumpView = () => setViewTick((t) => t + 1);
+  // Spread offsets are in screen pixels, so a zoom would distort the grid — collapse like
   // markercluster does; and re-cluster once the zoom settles.
   useMapEvents({
     click: () => setExpandedKey(null),
     zoomstart: () => setExpandedKey(null),
-    zoomend: () => setMapZoom(map.getZoom()),
+    zoomend: () => {
+      setMapZoom(map.getZoom());
+      bumpView();
+    },
+    moveend: bumpView,
+    resize: bumpView,
+    viewreset: bumpView,
   });
+  useEffect(() => {
+    // Once the map is ready and after the first paint (the initial fitBounds/resize).
+    map.whenReady(bumpView);
+    const raf = requestAnimationFrame(bumpView);
+    return () => cancelAnimationFrame(raf);
+  }, [map]);
 
-  // Same-kind, same-spot stacks, bucketed by kind so clusters never mix graces, bosses and
-  // items. Keyed by kind + location so an open popup / spread stack survives unrelated
-  // pin changes.
-  const spotsByKind = useMemo(() => {
-    const byKind = new Map<PinKind, Spot[]>();
+  // Same-spot stacks, bucketed by merge group so clusters never mix kinds or found-states.
+  // Keyed by group + location so an open popup / spread stack survives unrelated pin
+  // changes.
+  const spotsByGroup = useMemo(() => {
+    const byGroup = new Map<string, Spot[]>();
     for (const [key, group] of groupByLocation(pins)) {
       const [pin] = group;
       if (!pin) continue;
       const spot: Spot = { key, pins: group, px: pin.px, py: pin.py };
-      const list = byKind.get(pin.kind);
+      const g = mergeGroup(pin);
+      const list = byGroup.get(g);
       if (list) list.push(spot);
-      else byKind.set(pin.kind, [spot]);
+      else byGroup.set(g, [spot]);
     }
-    return [...byKind.values()];
+    return [...byGroup.values()];
   }, [pins]);
   // `zoom` is the pins' native (master-pixel) zoom: 1 master px = 2^(mapZoom - zoom) screen px.
   // Clustering stays on at every zoom — pins closer than the radius merge even at max zoom,
   // where a cluster click spiderfies instead of zooming.
   const clusters = useMemo(
     () =>
-      spotsByKind.flatMap((spots) =>
+      spotsByGroup.flatMap((spots) =>
         clusterSpots(spots, CLUSTER_RADIUS_PX / 2 ** (mapZoom - zoom)),
       ),
-    [spotsByKind, mapZoom, zoom],
+    [spotsByGroup, mapZoom, zoom],
   );
+  const visibleClusters = useMemo(() => {
+    // `viewTick` is the recompute trigger: the bounds are read from the map, not state.
+    void viewTick;
+    // An unsized container (hidden tab/pane, not laid out yet) has point-sized bounds that
+    // would cull everything — render all until it has a real size.
+    const size = map.getSize();
+    if (size.x === 0 || size.y === 0) return clusters;
+    const view = map.getBounds().pad(0.3);
+    return clusters.filter(
+      (c) => c.key === expandedKey || view.contains(map.unproject([c.px, c.py], zoom)),
+    );
+  }, [clusters, viewTick, expandedKey, map, zoom]);
 
-  /** Fan `group` out around `center` on screen-pixel legs (see {@link spiderOffsets}). */
+  /** Spread `group` into a grid around `center` (see {@link spreadOffsets}). */
   const renderSpider = (key: string, center: LatLng, group: readonly MapPin[]) => {
     const hub = map.latLngToLayerPoint(center);
-    const legs = spiderOffsets(group.length).map(([dx, dy]) =>
+    const legs = spreadOffsets(group.length).map(([dx, dy]) =>
       map.layerPointToLatLng(hub.add([dx, dy])),
     );
     // Key spread pins by identity, not index: if the group changes while spread (a pickup
@@ -676,6 +718,7 @@ function MarkerLayer({ pins, zoom }: { pins: MapPin[]; zoom: number }) {
     const center = map.unproject([px, py], zoom);
     if (group.length === 1) return <SinglePinMarker key={key} pin={pin} position={center} />;
     if (expandedKey === key) return renderSpider(key, center, group);
+    // (A spread stack is keyed by its spot; a spread cluster by its cluster key.)
     return (
       <Marker
         key={key}
@@ -692,7 +735,7 @@ function MarkerLayer({ pins, zoom }: { pins: MapPin[]; zoom: number }) {
 
   return (
     <>
-      {clusters.map((cluster) => {
+      {visibleClusters.map((cluster) => {
         const [only] = cluster.spots;
         if (cluster.spots.length === 1 && only) return renderSpot(only);
         const center = map.unproject([cluster.px, cluster.py], zoom);
