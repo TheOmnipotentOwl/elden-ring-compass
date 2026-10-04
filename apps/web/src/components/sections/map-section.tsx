@@ -15,12 +15,17 @@
  */
 import {
   ChevronDownIcon,
+  CrownIcon,
+  GemIcon,
   LayersIcon,
   LocateFixedIcon,
   MapPinIcon,
   PackageCheckIcon,
   PackageIcon,
+  PackageOpenIcon,
   PackageSearchIcon,
+  PackageXIcon,
+  RepeatIcon,
   SkullIcon,
   Trash2Icon,
 } from 'lucide-react';
@@ -28,7 +33,7 @@ import { MapPinGlyph } from '@/components/icons/map-pin-glyph';
 import { useAtomValue } from '@effect/atom-react';
 import { Option } from 'effect';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useMemo, useState } from 'react';
 
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useDataTableData } from '@/lib/data-table-data';
@@ -43,8 +48,15 @@ import { BADGE_LABEL, bossBadges, bossMapName, bossReward } from '@/lib/boss-met
 import { playerToMasterPixel } from '@/lib/map-affine';
 import { mapManifestAtom, mapTileIndexAtom } from '@/lib/map-tiles';
 import { usePickupFlags } from '@/lib/use-pickup-flags';
-import { PICKUP_STATUS_LABEL, pickupState } from '@/lib/vm/item-pickups';
-import { bossMapIdByFlag, bossPinByFlag, itemPins } from '@/lib/vm/map-pins';
+import {
+  isCollected,
+  ITEM_FILTER_LABEL,
+  type ItemFilter,
+  matchesItemFilter,
+  pickupState,
+  pickupStatusLabel,
+} from '@/lib/vm/item-pickups';
+import { ALL_ITEM_PINS, bossMapIdByFlag, bossPinByFlag, itemPins } from '@/lib/vm/map-pins';
 import { useSelectedSlot } from '@/stores/slot-selection-store';
 
 import { useRowSelectionControls, useTableStateMap } from '../data-table/data-table-store';
@@ -93,6 +105,45 @@ const LAYER_META = [
   { key: 'items', label: 'Items', icon: PackageIcon, color: '#3cbfdb' },
 ] as const;
 
+/** Item quick-select presets, in menu order (labels: `ITEM_FILTER_LABEL`). */
+const ITEM_PRESETS = [
+  { filter: 'farmable', icon: RepeatIcon },
+  { filter: 'one-time', icon: GemIcon },
+  { filter: 'not-collected', icon: PackageOpenIcon },
+  { filter: 'not-collected-one-time', icon: PackageXIcon },
+  { filter: 'boss-drops', icon: CrownIcon },
+] as const satisfies ReadonlyArray<{ filter: ItemFilter; icon: unknown }>;
+
+function QuickGroupLabel({ children }: { children: ReactNode }) {
+  return (
+    <span className='mt-1 px-2 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase first:mt-0'>
+      {children}
+    </span>
+  );
+}
+
+function QuickButton({
+  active = false,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      variant='ghost'
+      size='sm'
+      aria-pressed={active}
+      className={cn('w-full shrink-0 justify-start font-normal', active && 'bg-muted')}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  );
+}
+
 /**
  * Top-right floating rail: a button row toggling the two right-side panels —
  * "Nearby items" (closed by default; opt-in glance tool) and the map controls
@@ -107,7 +158,10 @@ function MapRightRail({
   onLayerChange,
   hidePickedUp,
   onHidePickedUpChange,
-  onQuickSelect,
+  onQuickSelectEvents,
+  onQuickSelectItems,
+  itemFilter,
+  onResetItemFilter,
   onClearPins,
   pinCount,
   playerPin,
@@ -118,7 +172,10 @@ function MapRightRail({
   onLayerChange: (key: LayerKey, visible: boolean) => void;
   hidePickedUp: boolean;
   onHidePickedUpChange: (hide: boolean) => void;
-  onQuickSelect: (type: 'grace' | 'boss', on: boolean) => void;
+  onQuickSelectEvents: (type: 'grace' | 'boss', on: boolean) => void;
+  onQuickSelectItems: (filter: ItemFilter) => void;
+  itemFilter: ItemFilter;
+  onResetItemFilter: () => void;
   onClearPins: () => void;
   pinCount: number;
   playerPin: MapPin | null;
@@ -197,40 +254,43 @@ function MapRightRail({
           </div>
           <div className='border-t border-border pt-2.5'>
             <PanelLabel>Quick select</PanelLabel>
-            <div className='flex flex-col gap-0.5'>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='w-full justify-start font-normal'
-                onClick={() => onQuickSelect('grace', true)}
-              >
+            {/* Each preset REPLACES its own category's pins (graces / bosses / items),
+                so it always visibly changes the map. Scrolls on short viewports. */}
+            <div className='flex max-h-56 flex-col gap-0.5 overflow-y-auto pr-1'>
+              <QuickGroupLabel>Graces</QuickGroupLabel>
+              <QuickButton onClick={() => onQuickSelectEvents('grace', true)}>
                 <MapPinIcon className='text-amber-400' /> Discovered Graces
-              </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='w-full justify-start font-normal'
-                onClick={() => onQuickSelect('grace', false)}
-              >
+              </QuickButton>
+              <QuickButton onClick={() => onQuickSelectEvents('grace', false)}>
                 <MapPinIcon /> Undiscovered Graces
-              </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='w-full justify-start font-normal'
-                onClick={() => onQuickSelect('boss', true)}
-              >
-                <SkullIcon /> Completed Bosses
-              </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='w-full justify-start font-normal'
-                onClick={() => onQuickSelect('boss', false)}
-              >
+              </QuickButton>
+              <QuickGroupLabel>Bosses</QuickGroupLabel>
+              <QuickButton onClick={() => onQuickSelectEvents('boss', true)}>
+                <SkullIcon className='text-red-400' /> Completed Bosses
+              </QuickButton>
+              <QuickButton onClick={() => onQuickSelectEvents('boss', false)}>
                 <SkullIcon /> Incomplete Bosses
-              </Button>
+              </QuickButton>
+              <QuickGroupLabel>Items</QuickGroupLabel>
+              {ITEM_PRESETS.map(({ filter, icon: Icon }) => (
+                <QuickButton
+                  key={filter}
+                  active={itemFilter === filter}
+                  onClick={() => onQuickSelectItems(filter)}
+                >
+                  <Icon className='text-cyan-400' /> {ITEM_FILTER_LABEL[filter]}
+                </QuickButton>
+              ))}
             </div>
+            {itemFilter !== 'all' && (
+              <button
+                type='button'
+                className='mt-1.5 w-full cursor-pointer text-left text-[11px] text-muted-foreground hover:text-foreground'
+                onClick={onResetItemFilter}
+              >
+                Item pins limited to “{ITEM_FILTER_LABEL[itemFilter]}” — show all locations
+              </button>
+            )}
           </div>
           <div className='border-t border-border pt-2'>
             <Button
@@ -300,7 +360,7 @@ function MapLegendOverlay({ defaultOpen }: { defaultOpen: boolean }) {
         <span className='flex items-center gap-1'>
           <MapPinGlyph className='size-3.5' style={{ color: '#3cbfdb' }} filled />
           <MapPinGlyph className='size-3.5' style={{ color: '#356e7a' }} filled /> Items (picked up
-          here / not yet)
+          / not yet or farmable)
         </span>
         <span className='flex items-center gap-1.5'>
           <span className='flex size-4 items-center justify-center rounded-full border border-white bg-[#356e7a] text-[8px] font-bold text-white'>
@@ -345,11 +405,12 @@ function bossEnrichment(flag: number, mapId: string | undefined, defeated: boole
   };
 }
 
-function useSelectedPins(): MapPin[] {
+function useSelectedPins(itemFilter: ItemFilter): MapPin[] {
   const tableState = useTableStateMap();
   const eventsItems = useDataTableData('events');
   const allTables = useInventoryTables();
   const eventFlags = usePickupFlags();
+  const hasSave = !!useSelectedSlot();
 
   return useMemo(() => {
     // Defeat state by flag, so bosses-table pins (which only know the flag) get the
@@ -421,34 +482,38 @@ function useSelectedPins(): MapPin[] {
           if (!row) return [];
           const locations = itemPins(type, row.id);
           const owned = row.quantity > 0;
-          return locations.map((p) => {
+          return locations.flatMap((p): MapPin[] => {
             // Collected-ness is per LOCATION — this spot's pickup flag in the save —
             // not "you own a copy somewhere" (see lib/vm/item-pickups.ts). When the flags
             // can't be read (shared link, untracked lot), fall back to ownership.
             const pickup = pickupState(p, eventFlags);
-            const collected = pickup === 'unknown' ? owned : pickup === 'picked-up';
-            return {
-              kind: 'item',
-              name: row.name,
-              wikiName: wikiNameForItem(row) ?? undefined,
-              category: p.source === 'map' ? 'Treasure' : p.approx ? 'Drop · approx. area' : 'Drop',
-              description: '',
-              discovered: collected, // collected → brighter shade
-              pickup,
-              sourceLabel:
-                p.source === 'map' ? 'Treasure' : p.approx ? 'Drop · approx. area' : 'Drop',
-              chancePct: p.chance < 1 ? Math.round(p.chance * 100) : undefined,
-              quantity: row.quantity,
-              locationCount: locations.length,
-              status: pickup === 'unknown' && owned ? 'Owned' : PICKUP_STATUS_LABEL[pickup],
-              master: p.master,
-              px: p.px,
-              py: p.py,
-            };
+            // An item quick-select narrows which of the item's locations show.
+            if (!matchesItemFilter(itemFilter, p, pickup, owned, hasSave)) return [];
+            return [
+              {
+                kind: 'item',
+                name: row.name,
+                wikiName: wikiNameForItem(row) ?? undefined,
+                category:
+                  p.source === 'map' ? 'Treasure' : p.approx ? 'Drop · approx. area' : 'Drop',
+                description: '',
+                discovered: isCollected(pickup, owned, hasSave) === true, // brighter shade
+                pickup,
+                sourceLabel:
+                  p.source === 'map' ? 'Treasure' : p.approx ? 'Drop · approx. area' : 'Drop',
+                chancePct: p.chance < 1 ? Math.round(p.chance * 100) : undefined,
+                quantity: row.quantity,
+                locationCount: locations.length,
+                status: pickupStatusLabel(pickup, owned, hasSave),
+                master: p.master,
+                px: p.px,
+                py: p.py,
+              },
+            ];
           });
         }),
     );
-  }, [tableState, eventsItems, allTables, eventFlags]);
+  }, [tableState, eventsItems, allTables, eventFlags, hasSave, itemFilter]);
 }
 
 /** "You are here" pin from the active save's player position (overworld only). */
@@ -527,6 +592,8 @@ export function MapSection({ embedded = false }: { embedded?: boolean } = {}) {
   });
   // Hide item pins whose pickup flag is set (collected from that exact spot).
   const [hidePickedUp, setHidePickedUp] = useState(true);
+  // Which locations of pinned items show — set by the item quick-selects.
+  const [itemFilter, setItemFilter] = useState<ItemFilter>('all');
   // Bumped to ask the map to recenter on the player ("center on me").
   const [recenterToken, setRecenterToken] = useState(0);
 
@@ -534,7 +601,7 @@ export function MapSection({ embedded = false }: { embedded?: boolean } = {}) {
   // so the overlays' mount-time `defaultOpen` is reliable.
   const isMobile = useIsMobile();
 
-  const pins = useSelectedPins();
+  const pins = useSelectedPins(itemFilter);
   const playerPin = usePlayerPin();
   const bloodstainPin = useBloodstainPin();
   const slotConnected = !!useSelectedSlot();
@@ -577,24 +644,72 @@ export function MapSection({ embedded = false }: { embedded?: boolean } = {}) {
     [pins, layers, hidePickedUp, activeMapId],
   );
   const eventsItems = useDataTableData('events');
-  const { setRowSelection, clearAllRowSelection: clearPins } = useRowSelectionControls();
+  const allTables = useInventoryTables();
+  const pickupFlags = usePickupFlags();
+  const { setRowSelection, clearAllRowSelection } = useRowSelectionControls();
+  const clearPins = () => {
+    clearAllRowSelection();
+    setItemFilter('all');
+  };
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
   /**
-   * Add all events of `type` matching `on` (that have a placeable position) to the
-   * current pin selection. Additive, not replacing — clicking "Undiscovered Graces"
-   * then "Incomplete Bosses" leaves both pinned; use "Clear pins" to reset.
+   * Pin exactly the events of `type` matching `on` (that have a placeable position).
+   * REPLACES that type's pins (graces or bosses) and leaves the other categories alone —
+   * every grace/boss starts pinned on a first visit, so an additive select was a no-op.
    */
   const selectEvents = (type: 'grace' | 'boss', on: boolean) => {
+    const ofType = new Set(eventsItems.filter((e) => e.type === type).map((e) => e.id.toString()));
     const matches = eventsItems.filter((e) => e.type === type && e.on === on && e.pixel);
     setRowSelection('events')((prev) => {
-      const next = { ...prev };
+      const next = Object.fromEntries(Object.entries(prev).filter(([id]) => !ofType.has(id)));
       for (const e of matches) next[e.id.toString()] = true;
       return next;
     });
+    // Boss pins can also come from the Bosses table; the preset owns boss pins now.
+    if (type === 'boss') setRowSelection('bosses')(() => ({}));
+    setLayers((l) => ({ ...l, [type === 'grace' ? 'graces' : 'bosses']: true }));
+  };
+
+  /**
+   * Pin every item with at least one location matching `filter`, and limit item pins to
+   * those locations. REPLACES all item pins (across the inventory tables).
+   */
+  const selectItems = (filter: ItemFilter) => {
+    // (placement type, item id) → the inventory row that owns it (first table wins, as in
+    // the Nearby panel — goods ids resolve to one row across the goods tables).
+    const rowByKey = new Map<string, { tableId: InventoryTableType; id: string; owned: boolean }>();
+    for (const [tableId, result] of Object.entries(allTables)) {
+      const type = TABLE_PLACEMENT_TYPE[tableId as InventoryTableType];
+      for (const row of result.items) {
+        const k = `${type}:${row.id.toString()}`;
+        if (!rowByKey.has(k)) {
+          rowByKey.set(k, {
+            tableId: tableId as InventoryTableType,
+            id: row.id.toString(),
+            owned: row.quantity > 0,
+          });
+        }
+      }
+    }
+    const picked = new Map<InventoryTableType, Record<string, true>>();
+    for (const pin of ALL_ITEM_PINS) {
+      const hit = rowByKey.get(`${pin.itemType}:${pin.itemId.toString()}`);
+      if (!hit) continue;
+      if (!matchesItemFilter(filter, pin, pickupState(pin, pickupFlags), hit.owned, slotConnected))
+        continue;
+      const sel = picked.get(hit.tableId) ?? {};
+      sel[hit.id] = true;
+      picked.set(hit.tableId, sel);
+    }
+    for (const tableId of Object.keys(TABLE_PLACEMENT_TYPE) as InventoryTableType[]) {
+      setRowSelection(tableId)(() => picked.get(tableId) ?? {});
+    }
+    setItemFilter(filter);
+    setLayers((l) => ({ ...l, items: true }));
   };
 
   return (
@@ -708,7 +823,10 @@ export function MapSection({ embedded = false }: { embedded?: boolean } = {}) {
               onLayerChange={(key, visible) => setLayers((l) => ({ ...l, [key]: visible }))}
               hidePickedUp={hidePickedUp}
               onHidePickedUpChange={setHidePickedUp}
-              onQuickSelect={selectEvents}
+              onQuickSelectEvents={selectEvents}
+              onQuickSelectItems={selectItems}
+              itemFilter={itemFilter}
+              onResetItemFilter={() => setItemFilter('all')}
               onClearPins={clearPins}
               pinCount={pins.length}
               playerPin={playerPin}

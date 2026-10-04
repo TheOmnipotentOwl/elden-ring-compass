@@ -8,7 +8,13 @@ import { describe, expect } from 'vitest';
 import { parseEldenRingData } from '../er-save-parser';
 import type { Slot } from '../save-dto';
 import { inventoryDbView } from './inventory';
-import { isEventFlagSet, pickupState, summarizePickups } from './item-pickups';
+import {
+  isEventFlagSet,
+  matchesItemFilter,
+  pickupState,
+  pickupStatusLabel,
+  summarizePickups,
+} from './item-pickups';
 import { ALL_ITEM_PINS } from './map-pins';
 
 // Per-LOCATION pickup detection against the committed `ER0000.sl2` fixture (5 characters,
@@ -145,4 +151,40 @@ it.layer(NodeServices.layer)('item pickups — per-location, from event flags (E
       expect(mixed.length).toBeGreaterThan(0);
     }),
   );
+});
+
+describe('item pickups — labels and quick-select filters', () => {
+  const STATES = ['picked-up', 'available', 'respawns', 'unknown'] as const;
+
+  it('uses one vocabulary: with a save, never the no-save "One-time pickup" label', () => {
+    for (const state of STATES) {
+      for (const owned of [true, false]) {
+        const withSave = pickupStatusLabel(state, owned, true);
+        expect(['Picked up', 'Not picked up', 'Farmable (respawns)']).toContain(withSave);
+        const noSave = pickupStatusLabel(state, owned, false);
+        expect(['One-time pickup', 'Picked up', 'Not picked up', 'Farmable (respawns)']).toContain(
+          noSave,
+        );
+      }
+    }
+    expect(pickupStatusLabel('unknown', false, false)).toBe('One-time pickup');
+    expect(pickupStatusLabel('unknown', true, true)).toBe('Picked up');
+  });
+
+  it('filters partition farmable vs one-time, and not-collected excludes collected', () => {
+    const pin = { bossDrop: false };
+    for (const state of STATES) {
+      const farm = matchesItemFilter('farmable', pin, state, false, true);
+      const once = matchesItemFilter('one-time', pin, state, false, true);
+      expect(farm).not.toBe(once);
+    }
+    expect(matchesItemFilter('not-collected', pin, 'picked-up', false, true)).toBe(false);
+    expect(matchesItemFilter('not-collected', pin, 'respawns', false, true)).toBe(true);
+    expect(matchesItemFilter('not-collected-one-time', pin, 'respawns', false, true)).toBe(false);
+    expect(matchesItemFilter('not-collected-one-time', pin, 'available', false, true)).toBe(true);
+    expect(matchesItemFilter('boss-drops', { bossDrop: true }, 'available', false, true)).toBe(
+      true,
+    );
+    expect(matchesItemFilter('boss-drops', pin, 'available', false, true)).toBe(false);
+  });
 });

@@ -24,7 +24,16 @@ export interface ItemPin extends MasterPixel {
    * once this specific pickup was collected — see `lib/vm/item-pickups.ts`.
    */
   flagId: number;
+  /**
+   * A one-time enemy / scripted drop within {@link BOSS_DROP_RADIUS} of a placed boss —
+   * remembrances, Great Runes, boss weapons. Proximity-based (bosses carry no entity id
+   * to join on), so a unique drop from a mob standing in an arena can be included.
+   */
+  bossDrop: boolean;
 }
+
+/** Master pixels (≈ metres) from a boss pin within which a one-time drop is its drop. */
+const BOSS_DROP_RADIUS = 15;
 
 /** entity id → overworld master pixel (m60/m61-placed entities only). */
 const entityPixel = new Map<number, MasterPixel>();
@@ -102,6 +111,11 @@ export interface PlacedItemPin extends ItemPin {
 const { itemPinsByKey, allItemPins } = (() => {
   const map = new Map<string, ItemPin[]>();
   const all: PlacedItemPin[] = [];
+  const bosses = [...bossPinByFlag.values()];
+  const nearBoss = (px: MasterPixel) =>
+    bosses.some(
+      (b) => b.master === px.master && Math.hypot(b.px - px.px, b.py - px.py) <= BOSS_DROP_RADIUS,
+    );
   for (const p of PLACEMENTS) {
     const px = overworldMarkerToMasterPixel(p.mapId, p.x, p.z);
     if (!px) continue;
@@ -114,6 +128,7 @@ const { itemPinsByKey, allItemPins } = (() => {
       quantity: p.quantity,
       approx: p.source === 'event' && p.entityId === 0,
       flagId: p.flagId,
+      bossDrop: p.source !== 'map' && p.flagId !== 0 && nearBoss(px),
     };
     all.push(pin);
     const k = itemKey(p.itemType, p.itemId);
