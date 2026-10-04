@@ -1,4 +1,4 @@
-import { Effect, Path } from 'effect';
+import { Effect, Option, Path } from 'effect';
 import { Command, Flag } from 'effect/cli';
 
 import { type ImageFormat, PipelineContext } from './domain/context.ts';
@@ -55,12 +55,40 @@ const skipImages = Flag.Boolean('skip-images').pipe(
   ),
 );
 
+// `--unpack-dir`: unpack into this dir instead of the install's `Game/` folder, and only
+// the files the pipeline reads (msg/event/mapstudio, + map/menu textures unless
+// `--skip-images`) — ~29 MB of data instead of the full ~68 GB archive set. The install
+// is then only ever read (archives, regulation.bin, the Oodle DLL, eldenring.exe).
+const unpackDir = Flag.Directory('unpack-dir').pipe(
+  Flag.optional,
+  Flag.withDescription(
+    'Unpack only the needed game files into this dir instead of the install (read-only install).',
+  ),
+);
+
+/** Archive paths the pipeline reads, for a filtered `--unpack-dir` unpack. */
+const DATA_PATHS = [
+  /^\/msg\/engus\//,
+  /^\/event\/.*\.emevd\.dcx$/,
+  /^\/map\/mapstudio\/.*\.msb\.dcx$/,
+];
+const IMAGE_PATHS = [/^\/menu\/71_maptile\./, /^\/menu\/hi\/0[0-3]_/];
+
 const extract = Command.make(
   'extract',
-  { gameDir, outDir, clean, imageFormat, imageQuality, skipImages },
-  ({ gameDir, outDir, clean, imageFormat, imageQuality, skipImages }) =>
+  { gameDir, outDir, clean, imageFormat, imageQuality, skipImages, unpackDir },
+  ({
+    gameDir,
+    outDir,
+    clean,
+    imageFormat,
+    imageQuality,
+    skipImages,
+    unpackDir,
+  }) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
+      const wanted = skipImages ? DATA_PATHS : [...DATA_PATHS, ...IMAGE_PATHS];
       yield* runPipeline.pipe(
         Effect.provideService(PipelineContext, {
           gameDir,
@@ -70,6 +98,13 @@ const extract = Command.make(
           imageFormat,
           imageQuality,
           skipImages,
+          unpackRoot: Option.match(unpackDir, {
+            onNone: () => path.join(gameDir, 'Game'),
+            onSome: (dir) => path.resolve(dir),
+          }),
+          unpackInclude: Option.isSome(unpackDir)
+            ? (archivePath: string) => wanted.some((re) => re.test(archivePath))
+            : undefined,
         }),
       );
     }),

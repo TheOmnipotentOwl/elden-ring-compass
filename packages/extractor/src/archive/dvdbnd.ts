@@ -37,9 +37,19 @@ export interface UnpackSummary {
 }
 
 export interface UnpackOptions {
-  /** The `…/ELDEN RING/Game` dir — where the `.bhd`/`.bdt` archives live and
-   *  where loose files are written (UXM parity: unpack target == game dir). */
+  /** The `…/ELDEN RING/Game` dir — where the `.bhd`/`.bdt` archives live. */
   readonly gameRoot: string;
+  /**
+   * Where loose files are written. Defaults to `gameRoot` (UXM parity: unpack in place,
+   * with `_backup/` + `--clean` restore). Any other dir is a side-by-side unpack that
+   * never writes into the install: no backup step, and `--clean` only clears this dir.
+   */
+  readonly unpackRoot?: string;
+  /**
+   * Only unpack dictionary-known files whose archive path (e.g. `/msg/engus/item.msgbnd.dcx`,
+   * sd files prefixed `/sd`) passes this; unknown hashes are skipped. Default: everything.
+   */
+  readonly include?: (archivePath: string) => boolean;
   /** Restore backups + delete previously-unpacked dirs, then re-extract. */
   readonly clean: boolean;
 }
@@ -128,9 +138,11 @@ const backupDirs = (gameRoot: string) =>
 
 const unpackArchive = (
   gameRoot: string,
+  outRoot: string,
   archive: string,
   dictionary: Map<bigint, string>,
   mkdirCache: Set<string>,
+  include: ((archivePath: string) => boolean) | undefined,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -173,12 +185,21 @@ const unpackArchive = (
     let extracted = 0;
     let skipped = 0;
     let unknown = 0;
+    let filtered = 0;
 
     for (const entry of entries) {
       const known = dictionary.get(entry.hash);
+      // A filtered unpack only wants named files it can select by path.
+      if (
+        include &&
+        (known === undefined || !include(`${isSd ? '/sd' : ''}${known}`))
+      ) {
+        filtered++;
+        continue;
+      }
       let target: string;
       if (known !== undefined) {
-        target = `${gameRoot}${isSd ? '/sd' : ''}${known}`;
+        target = `${outRoot}${isSd ? '/sd' : ''}${known}`;
         if (yield* fs.exists(target)) {
           skipped++;
           continue;
@@ -207,7 +228,7 @@ const unpackArchive = (
 
       if (known === undefined) {
         const name = `${archiveBase}_${entry.hash.toString().padStart(10, '0')}`;
-        target = `${gameRoot}/_unknown/${name}${guessExtension(bytes)}`;
+        target = `${outRoot}/_unknown/${name}${guessExtension(bytes)}`;
         if (yield* fs.exists(target)) {
           skipped++;
           continue;
@@ -226,14 +247,20 @@ const unpackArchive = (
     }
 
     const total = entries.length;
-    if (extracted === 0 && unknown === 0) {
+    const notNeeded = filtered ? `, ${filtered} not needed` : '';
+    if (filtered === total) {
       yield* Effect.logInfo(
-        `${archive}: all ${total} files already present (use --clean to re-extract)`,
+        `${archive}: nothing needed from this archive (${total} files)`,
+      );
+    } else if (extracted === 0 && unknown === 0) {
+      yield* Effect.logInfo(
+        `${archive}: all ${total - filtered} needed files already present${notNeeded}` +
+          ` (use --clean to re-extract)`,
       );
     } else {
       yield* Effect.logInfo(
         `${archive}: extracted ${extracted}, skipped ${skipped} already-present` +
-          `${unknown ? `, ${unknown} unknown` : ''} (${total} total)`,
+          `${unknown ? `, ${unknown} unknown` : ''}${notNeeded} (${total} total)`,
       );
     }
     return {
@@ -253,17 +280,39 @@ const unpackArchive = (
  */
 export const unpackInstall = (opts: UnpackOptions) =>
   Effect.gen(function* () {
-    const { gameRoot, clean } = opts;
+    const { gameRoot, clean, include } = opts;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const unpackRoot = opts.unpackRoot ?? gameRoot;
+    const inPlace = path.resolve(unpackRoot) === path.resolve(gameRoot);
     const dictionary = yield* loadDictionary;
 
-    if (clean) yield* cleanInstall(gameRoot);
-    yield* backupDirs(gameRoot);
+    if (inPlace) {
+      if (clean) yield* cleanInstall(gameRoot);
+      yield* backupDirs(gameRoot);
+    } else if (clean) {
+      // Side-by-side unpack: only ever clear what we unpacked into this dir.
+      for (const dir of [...ER_GAME_INFO.deleteDirs, 'sd', '_unknown']) {
+        yield* fs.remove(`${unpackRoot}/${dir}`, {
+          recursive: true,
+          force: true,
+        });
+      }
+      yield* Effect.logInfo(`  --clean: cleared ${unpackRoot}`);
+    }
 
     const mkdirCache = new Set<string>();
     const archives: ArchiveSummary[] = [];
     for (const archive of ER_GAME_INFO.archives) {
       archives.push(
-        yield* unpackArchive(gameRoot, archive, dictionary, mkdirCache),
+        yield* unpackArchive(
+          gameRoot,
+          unpackRoot,
+          archive,
+          dictionary,
+          mkdirCache,
+          include,
+        ),
       );
     }
 

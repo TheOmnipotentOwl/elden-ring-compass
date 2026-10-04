@@ -12,7 +12,7 @@ import { loadItemText } from '../game/item-text.ts';
 export const text = Effect.gen(function* () {
   const ctx = yield* PipelineContext;
   const oo2core = yield* findOodleDll(ctx.gameRoot);
-  const names = yield* loadItemText(ctx.gameRoot, oo2core);
+  const names = yield* loadItemText(ctx.unpackRoot, oo2core);
 
   yield* Effect.logInfo(
     `names — weapons:${names.WeaponName.size} armor:${names.ProtectorName.size} ` +

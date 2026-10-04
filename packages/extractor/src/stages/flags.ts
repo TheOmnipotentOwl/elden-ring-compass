@@ -24,7 +24,7 @@ export const flags = (params: Map<string, Uint8Array>) =>
     const ctx = yield* PipelineContext;
     const oo2core = yield* findOodleDll(ctx.gameRoot);
 
-    const graces = yield* loadGraces(params, ctx.gameRoot, oo2core);
+    const graces = yield* loadGraces(params, ctx.unpackRoot, oo2core);
     const dlcGraces = graces.filter((g) => g.areaNo === 61).length;
     const regions = new Set(graces.map((g) => g.region).filter(Boolean)).size;
     yield* Effect.logInfo(
@@ -36,7 +36,7 @@ export const flags = (params: Map<string, Uint8Array>) =>
         `grace sample — flag ${first.flagId} = "${first.name}" [${first.region}]`,
       );
 
-    const bosses = yield* loadBosses(params, ctx.gameRoot, oo2core);
+    const bosses = yield* loadBosses(params, ctx.unpackRoot, oo2core);
     const named = bosses.filter((b) => b.name).length;
     yield* Effect.logInfo(
       `boss defeat flags — ${bosses.length} arenas (GameAreaParam), ${named} named via EMEVD`,
@@ -61,14 +61,18 @@ export const flags = (params: Map<string, Uint8Array>) =>
         `${matchmakingRegionIds.length} matchmaking siblings (areaNo=0) ignored`,
     );
 
-    const mapFragments = yield* loadMapFragments(params, ctx.gameRoot, oo2core);
+    const mapFragments = yield* loadMapFragments(
+      params,
+      ctx.unpackRoot,
+      oo2core,
+    );
     const namedFragments = mapFragments.filter((m) => m.name).length;
     yield* Effect.logInfo(
       `map fragments — ${mapFragments.length} pieces (WorldMapPieceParam), ` +
         `${namedFragments} with a coarse PlaceName`,
     );
 
-    const archetypes = yield* loadArchetypes(ctx.gameRoot, oo2core);
+    const archetypes = yield* loadArchetypes(ctx.unpackRoot, oo2core);
     yield* Effect.logInfo(
       `archetypes — ${archetypes.length} starting classes (GR_MenuText)`,
     );

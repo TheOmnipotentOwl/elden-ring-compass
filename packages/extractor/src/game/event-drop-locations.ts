@@ -210,6 +210,26 @@ export const loadEventDropLocations = (
     const out = new Map<number, EventDropLocation>();
     for (const { lot, candidates } of awardCalls) {
       if (out.has(lot)) continue; // first resolution wins
+      // (0) direct: the award call itself names the dropping character — e.g. common
+      // event 90005860 `(…, <boss entity>, 0, <boss entity>, 0, <lot>, 0)`, "award this
+      // lot when that character dies", used for every Erdtree Avatar / Walking Mausoleum
+      // crystal-tear drop. Characters only, so a leash/trigger region can't win here.
+      const direct = [...candidates]
+        .filter((e) => e >= MIN_TRACED_ENTITY_ID)
+        .flatMap((e) => {
+          const m = markers.get(e);
+          return m?.isCharacter ? [{ e, m }] : [];
+        })[0];
+      if (direct) {
+        out.set(lot, {
+          mapId: direct.m.mapId,
+          x: direct.m.x,
+          y: direct.m.y,
+          z: direct.m.z,
+          viaEntity: direct.e,
+        });
+        continue;
+      }
       for (const flag of candidates) {
         // (1) precise: the flag-setting event's RunEvent init entity (templated invasions).
         let pick: { e: number; m: MarkerCoord } | undefined;

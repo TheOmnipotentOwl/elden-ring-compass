@@ -28,7 +28,16 @@ bun --filter @elden-ring-compass/extractor extract \
 
 # or from this package
 bun src/bin.ts extract --game-dir "<install dir>" --out .er-extractor-out
+
+# leave the install untouched: unpack only the ~29 MB the data stages read
+# (msg / event / mapstudio) into a separate dir; --skip-images skips the
+# texture stage (no Rust image codec needed)
+bun src/bin.ts extract --game-dir "<install dir>" \
+  --unpack-dir .er-extractor-out/game --skip-images
 ```
+
+By default the archives are unpacked **into the install's `Game/` folder** (UXM style,
+~68 GB, with a `_backup/` copy of `sd/`). With `--unpack-dir` the install is only read.
 
 `--game-dir`/`-g` is the folder containing `Game/` (where `regulation.bin`,
 `msg/`, `menu/`, `map/mapstudio/`, and `oo2core_*.dll` live).
