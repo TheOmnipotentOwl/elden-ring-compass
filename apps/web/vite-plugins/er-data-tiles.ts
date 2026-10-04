@@ -53,14 +53,17 @@ export function erDataTiles(): Plugin {
   let isBuild = false;
   let version = '';
   let indexJson: string | null = null;
+  let base = '';
 
   /** Lazily build (and cache) the JSON existence index from the on-disk pyramid. */
   const getIndexJson = (): string => (indexJson ??= JSON.stringify(buildTileIndex(src)));
 
   return {
     name: 'er-data-tiles',
-    config(_config, { command }) {
+    config(config, { command }) {
       isBuild = command === 'build';
+      // Honour Vite's `base` (e.g. `/<repo>/` on GitHub Pages) so tile URLs resolve there.
+      base = (config.base ?? '/').replace(/\/$/, '');
       if (!existsSync(src)) {
         throw new Error(
           `[er-data-tiles] tiles missing: ${src}\n` +
@@ -68,10 +71,12 @@ export function erDataTiles(): Plugin {
         );
       }
       version = hashTileTree(src);
-      return { define: { __ER_MAP_TILES_BASE__: JSON.stringify(`/map-tiles/${version}`) } };
+      return {
+        define: { __ER_MAP_TILES_BASE__: JSON.stringify(`${base}/map-tiles/${version}`) },
+      };
     },
     configureServer(server) {
-      const prefix = `/map-tiles/${version}/`;
+      const prefix = `${base}/map-tiles/${version}/`;
       server.middlewares.use((req, res, next) => {
         const url = req.url;
         if (!url || !url.startsWith(prefix)) return next();

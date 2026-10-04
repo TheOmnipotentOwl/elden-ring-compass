@@ -19,6 +19,11 @@ export interface ItemPin extends MasterPixel {
   // 'event' drops resolved to a real encounter entity are exact; those that fell
   // back to the lot's tile centre (no entityId) are approximate (±1 tile).
   approx: boolean;
+  /**
+   * Pickup event flag for THIS location (0 = respawning / farmable). Set in the save
+   * once this specific pickup was collected — see `lib/vm/item-pickups.ts`.
+   */
+  flagId: number;
 }
 
 /** entity id → overworld master pixel (m60/m61-placed entities only). */
@@ -108,6 +113,7 @@ const { itemPinsByKey, allItemPins } = (() => {
       chance: p.chance,
       quantity: p.quantity,
       approx: p.source === 'event' && p.entityId === 0,
+      flagId: p.flagId,
     };
     all.push(pin);
     const k = itemKey(p.itemType, p.itemId);

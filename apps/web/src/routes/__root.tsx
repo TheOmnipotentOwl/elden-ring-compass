@@ -50,16 +50,16 @@ export const Route = createRootRoute({
       { property: 'og:site_name', content: SITE_TITLE },
       { property: 'og:title', content: SITE_TITLE },
       { property: 'og:description', content: SITE_DESCRIPTION },
-      { property: 'og:image', content: '/favicon.svg' },
+      { property: 'og:image', content: `${import.meta.env.BASE_URL}favicon.svg` },
       // Twitter card
       { name: 'twitter:card', content: 'summary' },
       { name: 'twitter:title', content: SITE_TITLE },
       { name: 'twitter:description', content: SITE_DESCRIPTION },
-      { name: 'twitter:image', content: '/favicon.svg' },
+      { name: 'twitter:image', content: `${import.meta.env.BASE_URL}favicon.svg` },
     ],
     links: [
-      { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
-      { rel: 'apple-touch-icon', href: '/favicon.svg' },
+      { rel: 'icon', type: 'image/svg+xml', href: `${import.meta.env.BASE_URL}favicon.svg` },
+      { rel: 'apple-touch-icon', href: `${import.meta.env.BASE_URL}favicon.svg` },
     ],
   }),
 
@@ -79,7 +79,8 @@ function RootComponent() {
             <Outlet />
           </Providers>
         </RegistryProvider>
-        <Analytics />
+        {/* Vercel-hosted only: on GitHub Pages its `/_vercel/insights` script would 404. */}
+        {!__PAGES_BUILD__ && <Analytics />}
         <Scripts />
       </body>
     </html>

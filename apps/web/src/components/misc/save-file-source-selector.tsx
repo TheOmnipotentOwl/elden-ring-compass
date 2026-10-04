@@ -76,7 +76,7 @@ export function ShareCharacterButton({
         const url = new URL(
           typeof window === 'undefined' ? 'http://localhost/' : window.location.href,
         );
-        url.pathname = '/';
+        url.pathname = import.meta.env.BASE_URL;
         url.search = '';
         url.searchParams.set('save', encoded);
         url.hash = '';

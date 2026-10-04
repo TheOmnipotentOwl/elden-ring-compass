@@ -104,7 +104,13 @@ export const runPipeline = Effect.gen(function* () {
     Effect.annotateLogs('stage', '8-game-version'),
   );
 
-  yield* images.pipe(Effect.annotateLogs('stage', '8-images'));
+  if (ctx.skipImages) {
+    yield* Effect.logInfo('images — skipped (--skip-images)').pipe(
+      Effect.annotateLogs('stage', '8-images'),
+    );
+  } else {
+    yield* images.pipe(Effect.annotateLogs('stage', '8-images'));
+  }
   yield* codegen({
     graces,
     bosses,

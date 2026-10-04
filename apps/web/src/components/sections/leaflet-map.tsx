@@ -20,15 +20,26 @@ import {
   CRS,
   divIcon,
   GridLayer,
+  type LatLng,
   type LatLngBounds,
   latLngBounds,
+  point,
   TileLayer as LeafletTileLayer,
 } from 'leaflet';
 import { ExternalLinkIcon } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, Marker, Popup, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  MapContainer,
+  Marker,
+  Polyline,
+  Popup,
+  Tooltip,
+  useMap,
+  useMapEvents,
+} from 'react-leaflet';
 
 import { MAP_TILES_BASE, type MapManifest, type TileIndex } from '@/lib/map-tiles';
+import type { PickupState } from '@/lib/vm/item-pickups';
 import { wikiNameForBoss, wikiPageUrl } from '@/lib/wiki';
 
 /** What kind of thing a pin represents — drives its hover/popup content. */
@@ -69,6 +80,11 @@ export interface MapPin {
   sourceLabel?: string;
   /** Item: drop chance as a percentage (omitted when guaranteed). */
   chancePct?: number;
+  /**
+   * Item: this LOCATION's pickup state from the save's event flags
+   * (`lib/vm/item-pickups.ts`) — independent of inventory ownership.
+   */
+  pickup?: PickupState;
   /** Item: how many of this item the player owns. */
   quantity?: number;
   /** Item: how many pins this item places across the map. */
@@ -190,6 +206,35 @@ function pinIcon(category: string, discovered?: boolean) {
     popupAnchor: [0, -20],
   });
   pinIconCache.set(color, ic);
+  return ic;
+}
+
+/**
+ * Stacked-pin marker for several pins on one spot (a multi-item treasure lot, a boss and
+ * its drops, …): the same teardrop, coloured by the most "outstanding" pin in the stack,
+ * with the count in place of the dot. Cached per colour + label like {@link pinIcon}.
+ */
+function stackIcon(pins: readonly MapPin[]) {
+  const lead = pins.find((p) => p.discovered === false) ?? pins[0];
+  const color = lead ? categoryColor(lead.category, lead.discovered) : PIN_COLOR.default;
+  const label = pins.length > 9 ? '9+' : pins.length.toString();
+  const key = `${color}:${label}`;
+  const cached = pinIconCache.get(key);
+  if (cached) return cached;
+  const html =
+    `<svg width="28" height="28" viewBox="0 0 24 24" fill="${color}" stroke="#fff" ` +
+    `stroke-width="1.5" style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.55))">` +
+    `<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>` +
+    `<text x="12" y="13" text-anchor="middle" font-size="${label.length > 1 ? 7 : 9}" ` +
+    `font-weight="700" fill="#fff" stroke="none" font-family="system-ui,sans-serif">${label}</text></svg>`;
+  const ic = divIcon({
+    className: '',
+    html,
+    iconSize: [28, 28],
+    iconAnchor: [14, 26],
+    popupAnchor: [0, -24],
+  });
+  pinIconCache.set(key, ic);
   return ic;
 }
 
@@ -337,25 +382,355 @@ function PinPopupBody({ pin }: { pin: MapPin }) {
   );
 }
 
-/** Pins — already in master-pixel space; unproject at native zoom → latlng. */
+/**
+ * Group pins of the same kind (grace / boss / item) that sit on the same spot. Master
+ * pixels are 1 world-unit (≈1 m), so rounding to the pixel merges exact co-locations —
+ * every item of one treasure lot / one enemy's drop table shares its Part's coords —
+ * without merging neighbours. Kinds never share a stack: a boss and its drops at one spot
+ * stay a boss pin plus an item stack. Returns `[key, pins]`, the key unique per stack.
+ */
+function groupByLocation(pins: readonly MapPin[]): Array<[string, MapPin[]]> {
+  const groups = new Map<string, MapPin[]>();
+  for (const pin of pins) {
+    const key = `${pin.kind}:${Math.round(pin.px).toString()}:${Math.round(pin.py).toString()}`;
+    const group = groups.get(key);
+    if (group) group.push(pin);
+    else groups.set(key, [pin]);
+  }
+  return [...groups];
+}
+
+/** One-line tooltip for a stack: "3 items here · 1 picked up · click to spread". */
+function PinGroupTooltipBody({ pins }: { pins: readonly MapPin[] }) {
+  const pickedUp = pins.filter((p) => p.pickup === 'picked-up').length;
+  return (
+    <span>
+      <strong>
+        {pins.length} {pins.every((p) => p.kind === 'item') ? 'items' : 'pins'} here
+      </strong>
+      {pickedUp > 0 && <span className='opacity-70'> · {pickedUp} picked up</span>}
+      <span className='opacity-70'> · click to spread</span>
+    </span>
+  );
+}
+
+/**
+ * Screen-pixel offsets that fan `n` stacked pins out around their shared point —
+ * Leaflet.markercluster's "spiderfy" geometry (a circle for small stacks, an
+ * Archimedean spiral beyond 8), with spacing widened for our 24px teardrops.
+ */
+function spiderOffsets(n: number): Array<readonly [number, number]> {
+  if (n <= 8) {
+    const legLength = Math.max(30, (34 * (2 + n)) / (2 * Math.PI));
+    const step = (2 * Math.PI) / n;
+    return Array.from({ length: n }, (_, i) => {
+      const angle = Math.PI / 6 + i * step;
+      return [legLength * Math.cos(angle), legLength * Math.sin(angle)] as const;
+    });
+  }
+  const out: Array<readonly [number, number]> = [];
+  let legLength = 30;
+  let angle = 0;
+  for (let i = 0; i < n; i++) {
+    angle += 34 / legLength + i * 0.0005;
+    out.push([legLength * Math.cos(angle), legLength * Math.sin(angle)]);
+    legLength += (2 * Math.PI * 6) / angle;
+  }
+  return out;
+}
+
+/** Small hub dot left at a spread stack's true location (legs radiate from it). */
+const spiderHubIcon = divIcon({
+  className: '',
+  html: '<div style="width:8px;height:8px;border-radius:50%;background:#fff;box-shadow:0 0 3px rgba(0,0,0,.7)"></div>',
+  iconSize: [8, 8],
+  iconAnchor: [4, 4],
+});
+
+function SinglePinMarker({
+  pin,
+  position,
+  zIndexOffset,
+}: {
+  pin: MapPin;
+  position: LatLng;
+  zIndexOffset?: number;
+}) {
+  return (
+    <Marker
+      position={position}
+      icon={pinIcon(pin.category, pin.discovered)}
+      // Leaflet's default is 0; passing `undefined` would override it (NaN z-index).
+      zIndexOffset={zIndexOffset ?? 0}
+    >
+      <Tooltip direction='top' offset={[0, -18]}>
+        <PinTooltipBody pin={pin} />
+      </Tooltip>
+      <Popup>
+        <PinPopupBody pin={pin} />
+      </Popup>
+    </Marker>
+  );
+}
+
+/** Screen-space radius (px) within which nearby spots merge into one zoom-out cluster. */
+const CLUSTER_RADIUS_PX = 40;
+
+/** Pins on one exact spot (see {@link groupByLocation}). */
+interface Spot {
+  key: string;
+  pins: MapPin[];
+  px: number;
+  py: number;
+}
+
+/** Nearby spots merged at the current zoom — rendered as one count badge. */
+interface Cluster {
+  key: string;
+  spots: Spot[];
+  pins: MapPin[];
+  px: number;
+  py: number;
+}
+
+/**
+ * Greedy distance clustering over a spatial hash (O(n)): each not-yet-claimed spot seeds
+ * a cluster and claims every unclaimed spot within `radius` master pixels (only the 3×3
+ * neighbouring cells can hold one). Deterministic for a given pin order.
+ */
+function clusterSpots(spots: readonly Spot[], radius: number): Cluster[] {
+  const cellOf = (v: number) => Math.floor(v / radius);
+  const buckets = new Map<string, Spot[]>();
+  for (const spot of spots) {
+    const k = `${cellOf(spot.px).toString()}:${cellOf(spot.py).toString()}`;
+    const bucket = buckets.get(k);
+    if (bucket) bucket.push(spot);
+    else buckets.set(k, [spot]);
+  }
+  const claimed = new Set<Spot>();
+  const r2 = radius * radius;
+  const out: Cluster[] = [];
+  for (const seed of spots) {
+    if (claimed.has(seed)) continue;
+    const members: Spot[] = [];
+    const cx = cellOf(seed.px);
+    const cy = cellOf(seed.py);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const spot of buckets.get(`${(cx + dx).toString()}:${(cy + dy).toString()}`) ?? []) {
+          if (claimed.has(spot)) continue;
+          const ox = spot.px - seed.px;
+          const oy = spot.py - seed.py;
+          if (ox * ox + oy * oy > r2) continue;
+          claimed.add(spot);
+          members.push(spot);
+        }
+      }
+    }
+    out.push({
+      key: `c:${seed.key}`,
+      spots: members,
+      pins: members.flatMap((m) => m.pins),
+      px: members.reduce((sum, m) => sum + m.px, 0) / members.length,
+      py: members.reduce((sum, m) => sum + m.py, 0) / members.length,
+    });
+  }
+  return out;
+}
+
+/** Round count badge for a zoom-out cluster, coloured like its most outstanding pin. */
+function clusterIcon(pins: readonly MapPin[]) {
+  const lead = pins.find((p) => p.discovered === false) ?? pins[0];
+  const color = lead ? categoryColor(lead.category, lead.discovered) : PIN_COLOR.default;
+  const n = pins.length;
+  const size = n < 10 ? 30 : n < 50 ? 36 : 42;
+  const label = n > 999 ? '999+' : n.toString();
+  const key = `cluster:${color}:${size.toString()}:${label}`;
+  const cached = pinIconCache.get(key);
+  if (cached) return cached;
+  const ic = divIcon({
+    className: '',
+    html:
+      `<div style="width:${size.toString()}px;height:${size.toString()}px;border-radius:50%;` +
+      `background:${color};border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.6);` +
+      `display:flex;align-items:center;justify-content:center;color:#fff;` +
+      `font:700 ${size < 36 ? '11' : '12'}px system-ui,sans-serif;` +
+      `text-shadow:0 1px 2px rgba(0,0,0,.6)">${label}</div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+  pinIconCache.set(key, ic);
+  return ic;
+}
+
+/** Cluster tooltip: "12 pins · 8 items · 3 graces · 1 boss · click to expand". */
+function ClusterTooltipBody({ pins }: { pins: readonly MapPin[] }) {
+  const counts = { item: 0, grace: 0, boss: 0 };
+  for (const p of pins) if (p.kind in counts) counts[p.kind as keyof typeof counts]++;
+  const parts = [
+    counts.item > 0 && `${counts.item.toString()} item${counts.item === 1 ? '' : 's'}`,
+    counts.grace > 0 && `${counts.grace.toString()} grace${counts.grace === 1 ? '' : 's'}`,
+    counts.boss > 0 && `${counts.boss.toString()} boss${counts.boss === 1 ? '' : 'es'}`,
+  ].filter(Boolean);
+  return (
+    <span>
+      <strong>{pins.length} pins</strong>
+      {parts.length > 0 && <span className='opacity-70'> · {parts.join(' · ')}</span>}
+      <span className='opacity-70'> · click to expand</span>
+    </span>
+  );
+}
+
+/**
+ * Pins — already in master-pixel space; unproject at native zoom → latlng.
+ *
+ * Two levels of grouping keep the map legible (and the marker count — the main render
+ * cost — low when zoomed out):
+ *   1. **Clusters**: spots within {@link CLUSTER_RADIUS_PX} screen pixels at the current
+ *      zoom merge into one round count badge (at every zoom, max included). Clicking it
+ *      zooms to fit its spots when that would separate them, else spiderfies it in place.
+ *   2. **Same-spot stacks**: pins on one exact spot render as ONE numbered teardrop;
+ *      clicking it "spiderfies" the stack — each pin fans out on a leg (individually
+ *      hoverable/clickable) — and any click on the map itself, or a zoom, collapses it.
+ *      Marker clicks don't bubble to the map in Leaflet, so opening a spread pin's popup
+ *      keeps the stack open.
+ */
 function MarkerLayer({ pins, zoom }: { pins: MapPin[]; zoom: number }) {
   const map = useMap();
+  const [mapZoom, setMapZoom] = useState(() => map.getZoom());
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  // Spider offsets are in screen pixels, so a zoom would distort the fan — collapse like
+  // markercluster does; and re-cluster once the zoom settles.
+  useMapEvents({
+    click: () => setExpandedKey(null),
+    zoomstart: () => setExpandedKey(null),
+    zoomend: () => setMapZoom(map.getZoom()),
+  });
+
+  // Same-kind, same-spot stacks, bucketed by kind so clusters never mix graces, bosses and
+  // items. Keyed by kind + location so an open popup / spread stack survives unrelated
+  // pin changes.
+  const spotsByKind = useMemo(() => {
+    const byKind = new Map<PinKind, Spot[]>();
+    for (const [key, group] of groupByLocation(pins)) {
+      const [pin] = group;
+      if (!pin) continue;
+      const spot: Spot = { key, pins: group, px: pin.px, py: pin.py };
+      const list = byKind.get(pin.kind);
+      if (list) list.push(spot);
+      else byKind.set(pin.kind, [spot]);
+    }
+    return [...byKind.values()];
+  }, [pins]);
+  // `zoom` is the pins' native (master-pixel) zoom: 1 master px = 2^(mapZoom - zoom) screen px.
+  // Clustering stays on at every zoom — pins closer than the radius merge even at max zoom,
+  // where a cluster click spiderfies instead of zooming.
+  const clusters = useMemo(
+    () =>
+      spotsByKind.flatMap((spots) =>
+        clusterSpots(spots, CLUSTER_RADIUS_PX / 2 ** (mapZoom - zoom)),
+      ),
+    [spotsByKind, mapZoom, zoom],
+  );
+
+  /** Fan `group` out around `center` on screen-pixel legs (see {@link spiderOffsets}). */
+  const renderSpider = (key: string, center: LatLng, group: readonly MapPin[]) => {
+    const hub = map.latLngToLayerPoint(center);
+    const legs = spiderOffsets(group.length).map(([dx, dy]) =>
+      map.layerPointToLatLng(hub.add([dx, dy])),
+    );
+    // Key spread pins by identity, not index: if the group changes while spread (a pickup
+    // gets hidden, a layer toggles), an open popup must stay on ITS pin rather than being
+    // reused for whichever pin now sits at that index.
+    const seen = new Map<string, number>();
+    const pinKeys = group.map((p) => {
+      const base = `${p.kind}:${p.name}:${p.px.toString()}:${p.py.toString()}`;
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      return `${base}#${n.toString()}`;
+    });
+    return (
+      <Fragment key={key}>
+        {legs.map((leg, i) => (
+          <Polyline
+            key={`leg-${i.toString()}`}
+            positions={[center, leg]}
+            interactive={false}
+            pathOptions={{ color: '#fff', weight: 1.5, opacity: 0.7 }}
+          />
+        ))}
+        <Marker position={center} icon={spiderHubIcon} interactive={false} />
+        {group.map((p, i) => {
+          const leg = legs[i];
+          return leg ? (
+            <SinglePinMarker key={pinKeys[i]} pin={p} position={leg} zIndexOffset={1000} />
+          ) : null;
+        })}
+      </Fragment>
+    );
+  };
+
+  const renderSpot = ({ key, pins: group, px, py }: Spot) => {
+    const [pin] = group;
+    if (!pin) return null;
+    const center = map.unproject([px, py], zoom);
+    if (group.length === 1) return <SinglePinMarker key={key} pin={pin} position={center} />;
+    if (expandedKey === key) return renderSpider(key, center, group);
+    return (
+      <Marker
+        key={key}
+        position={center}
+        icon={stackIcon(group)}
+        eventHandlers={{ click: () => setExpandedKey(key) }}
+      >
+        <Tooltip direction='top' offset={[0, -22]}>
+          <PinGroupTooltipBody pins={group} />
+        </Tooltip>
+      </Marker>
+    );
+  };
+
   return (
     <>
-      {pins.map((pin, i) => (
-        <Marker
-          key={i}
-          position={map.unproject([pin.px, pin.py], zoom)}
-          icon={pinIcon(pin.category, pin.discovered)}
-        >
-          <Tooltip direction='top' offset={[0, -18]}>
-            <PinTooltipBody pin={pin} />
-          </Tooltip>
-          <Popup>
-            <PinPopupBody pin={pin} />
-          </Popup>
-        </Marker>
-      ))}
+      {clusters.map((cluster) => {
+        const [only] = cluster.spots;
+        if (cluster.spots.length === 1 && only) return renderSpot(only);
+        const center = map.unproject([cluster.px, cluster.py], zoom);
+        if (expandedKey === cluster.key) return renderSpider(cluster.key, center, cluster.pins);
+        return (
+          <Marker
+            key={cluster.key}
+            position={center}
+            icon={clusterIcon(cluster.pins)}
+            eventHandlers={{
+              click: () => {
+                // Zoom in to separate the cluster when that helps; at max zoom (or when its
+                // spots are too close for any zoom to split them) fan it out in place.
+                const bounds = latLngBounds(
+                  cluster.spots.map((s) => map.unproject([s.px, s.py], zoom)),
+                );
+                const target = Math.min(
+                  map.getBoundsZoom(bounds, false, point(120, 120)),
+                  map.getMaxZoom(),
+                );
+                // Would these spots still merge into one badge at `target`? Then zooming
+                // can't separate them — spread right away instead of needing a 2nd click.
+                const splitsAtTarget =
+                  clusterSpots(cluster.spots, CLUSTER_RADIUS_PX / 2 ** (target - zoom)).length > 1;
+                if (target > map.getZoom() + 0.01 && splitsAtTarget) {
+                  map.fitBounds(bounds, { padding: [60, 60], maxZoom: map.getMaxZoom() });
+                } else {
+                  setExpandedKey(cluster.key);
+                }
+              },
+            }}
+          >
+            <Tooltip direction='top' offset={[0, -16]}>
+              <ClusterTooltipBody pins={cluster.pins} />
+            </Tooltip>
+          </Marker>
+        );
+      })}
     </>
   );
 }

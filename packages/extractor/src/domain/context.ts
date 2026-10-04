@@ -10,6 +10,7 @@ import { Context } from 'effect';
  * `clean`    — re-extract from scratch (restore backups + delete unpacked dirs).
  * `imageFormat`/`imageQuality` — output encoding for the images stage
  *              (webp/png/jpeg/avif; quality 1–100, ignored for png).
+ * `skipImages` — skip the images stage, keeping existing `data/images/` output.
  */
 export type ImageFormat = 'webp' | 'png' | 'jpeg' | 'avif';
 
@@ -20,6 +21,7 @@ export interface PipelineContextValue {
   readonly clean: boolean;
   readonly imageFormat: ImageFormat;
   readonly imageQuality: number;
+  readonly skipImages: boolean;
 }
 
 /**

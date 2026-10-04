@@ -45,10 +45,20 @@ const imageQuality = Flag.Int('image-quality').pipe(
   Flag.withDescription('Quality 1–100 for lossy image formats (default 80).'),
 );
 
+// `--skip-images`: skip the images stage (map tiles + icons) and keep whatever is
+// already under `packages/data/images/`. Regenerating only the data files this way
+// doesn't need the Rust image codec (`build:image-codec`) to be built.
+const skipImages = Flag.Boolean('skip-images').pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
+    'Skip the images stage (keep existing tiles/icons); regenerate data files only.',
+  ),
+);
+
 const extract = Command.make(
   'extract',
-  { gameDir, outDir, clean, imageFormat, imageQuality },
-  ({ gameDir, outDir, clean, imageFormat, imageQuality }) =>
+  { gameDir, outDir, clean, imageFormat, imageQuality, skipImages },
+  ({ gameDir, outDir, clean, imageFormat, imageQuality, skipImages }) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       yield* runPipeline.pipe(
@@ -59,6 +69,7 @@ const extract = Command.make(
           clean,
           imageFormat,
           imageQuality,
+          skipImages,
         }),
       );
     }),
