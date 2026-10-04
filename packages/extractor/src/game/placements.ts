@@ -87,6 +87,7 @@ export const loadPlacements = (
   markers: readonly ClassifiedMarker[],
   treasures: readonly MapTreasure[],
   gameRoot: string,
+  unpackRoot: string = gameRoot,
 ): Effect.Effect<
   Placement[],
   | ParamError
@@ -206,7 +207,7 @@ export const loadPlacements = (
     }
     const oo2corePath = yield* findOodleDll(gameRoot);
     const exact = yield* loadEventDropLocations(
-      gameRoot,
+      unpackRoot,
       oo2corePath,
       markerCoords,
       orphanLots,

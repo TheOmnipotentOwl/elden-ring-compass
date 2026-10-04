@@ -37,13 +37,13 @@ export const markers = (
     const ctx = yield* PipelineContext;
     const oo2core = yield* findOodleDll(ctx.gameRoot);
     const { entities, treasures, mapCount } = yield* loadMapMarkers(
-      ctx.gameRoot,
+      ctx.unpackRoot,
       oo2core,
     );
 
     // npcParamId → English name, for the named NPCs only (generic mobs have nameId<=0).
     const npcName = yield* loadFmgTable(
-      ctx.gameRoot,
+      ctx.unpackRoot,
       oo2core,
       ITEM_MSGBNDS,
       'NpcName',

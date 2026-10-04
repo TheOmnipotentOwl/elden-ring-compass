@@ -17,12 +17,14 @@ export class UnpackError extends Data.TaggedError('UnpackError')<{
 export const unpack = Effect.gen(function* () {
   const ctx = yield* PipelineContext;
   yield* Effect.logInfo(
-    `dvdbnd → ${ctx.gameRoot}${ctx.clean ? ' (--clean)' : ''}`,
+    `dvdbnd ${ctx.gameRoot} → ${ctx.unpackRoot}${ctx.clean ? ' (--clean)' : ''}`,
   );
   // The unpacker is Effect-native: it logs via `Effect.logInfo` directly (the
   // `stage` annotation set in pipeline.ts flows through the surrounding context).
   const summary = yield* unpackInstall({
     gameRoot: ctx.gameRoot,
+    unpackRoot: ctx.unpackRoot,
+    include: ctx.unpackInclude,
     clean: ctx.clean,
   }).pipe(
     Effect.mapError((cause) => new UnpackError({ detail: String(cause) })),

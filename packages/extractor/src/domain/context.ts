@@ -11,6 +11,9 @@ import { Context } from 'effect';
  * `imageFormat`/`imageQuality` — output encoding for the images stage
  *              (webp/png/jpeg/avif; quality 1–100, ignored for png).
  * `skipImages` — skip the images stage, keeping existing `data/images/` output.
+ * `unpackRoot` — where unpacked game files live and are read from: `gameRoot` (unpack
+ *              in place, the UXM default) or a separate `--unpack-dir`.
+ * `unpackInclude` — with `--unpack-dir`, only the archive paths the pipeline reads.
  */
 export type ImageFormat = 'webp' | 'png' | 'jpeg' | 'avif';
 
@@ -22,6 +25,8 @@ export interface PipelineContextValue {
   readonly imageFormat: ImageFormat;
   readonly imageQuality: number;
   readonly skipImages: boolean;
+  readonly unpackRoot: string;
+  readonly unpackInclude?: (archivePath: string) => boolean;
 }
 
 /**

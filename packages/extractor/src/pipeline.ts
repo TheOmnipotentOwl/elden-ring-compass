@@ -25,6 +25,7 @@ import { unpack } from './stages/unpack.ts';
 export const runPipeline = Effect.gen(function* () {
   const ctx = yield* PipelineContext;
   yield* Effect.logInfo(`install: ${ctx.gameRoot}`);
+  yield* Effect.logInfo(`unpacked files: ${ctx.unpackRoot}`);
   yield* Effect.logInfo(`out (codegen artifacts): ${ctx.outDir}`);
 
   yield* unpack.pipe(Effect.annotateLogs('stage', '1-unpack'));
@@ -70,6 +71,7 @@ export const runPipeline = Effect.gen(function* () {
     markerEntities,
     treasures,
     ctx.gameRoot,
+    ctx.unpackRoot,
   ).pipe(Effect.annotateLogs('stage', '7-placements'));
   const enemyCount = placementRows.filter((p) => p.source === 'enemy').length;
   yield* Effect.logInfo(

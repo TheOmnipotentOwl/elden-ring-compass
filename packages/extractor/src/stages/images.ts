@@ -24,7 +24,7 @@ export const images = Effect.gen(function* () {
   const ctx = yield* PipelineContext;
   const oo2core = yield* findOodleDll(ctx.gameRoot);
   const summary = yield* extractImages(
-    ctx.gameRoot,
+    ctx.unpackRoot,
     oo2core,
     DATA_PACKAGE_DIR,
     { format: ctx.imageFormat, quality: ctx.imageQuality },
